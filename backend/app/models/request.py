@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
 from backend.app.models.feedback import Feedback
+from backend.app.models.routing_decision import RoutingDecision
 
 
 class Request(Base):
