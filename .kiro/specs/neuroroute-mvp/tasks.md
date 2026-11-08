@@ -106,7 +106,7 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 3: Disabled Models Excluded from Routing** — for any mix of enabled/disabled models queried by the routing helper, only enabled=True models are returned; **Validates: Requirements 1.7, 3.3, 3.4**
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.7_
 
-  - [ ]* 2.4 Run Model Registry property tests
+  - [ ] 2.4 Run Model Registry property tests
     - Execute `pytest backend/tests/test_models/ -v --tb=short`
     - **Property 1: Model Registry Round-Trip** — **Validates: Requirements 1.1, 1.3**
     - **Property 2: Model List Ordering** — **Validates: Requirements 1.2**
@@ -153,7 +153,18 @@ Work follows a strict dependency order: DB models → services → routers → t
         - Never propagates unhandled exceptions
     - _Requirements: 4.1, 4.2, 4.5, 4.6, 4.7, 4.9_
 
-  - [ ] 3.4 Write tests for provider adapters
+  - [ ] 3.4 Create `GroqAdapter`
+    - Create `backend/app/adapters/groq_adapter.py`
+    - Implement `GroqAdapter(ProviderAdapter)` using the existing `httpx` dependency and the verified Groq contract: `POST https://api.groq.com/openai/v1/chat/completions`, `Authorization: Bearer <GROQ_API_KEY>`, and a JSON body containing `model` and a user `messages` entry
+    - Read `GROQ_API_KEY` securely from the environment and raise `ConfigurationError` when it is absent or empty; never hardcode, store in a repr-visible field, log, or expose the credential
+    - Map `choices[0].message.content`, `usage.prompt_tokens`, and `usage.completion_tokens` into the common `ExecutionResult`
+    - Calculate estimated cost from the registered model's input/output pricing, rounded to 10 decimal places; do not hardcode Groq prices
+    - Enforce the shared 30-second timeout and 1,000,000-character response truncation
+    - Handle HTTP 429 rate limits, other non-2xx responses, timeouts, malformed responses, and unexpected provider failures by returning `ExecutionResult` with the appropriate failed/timed-out status rather than raising unhandled exceptions
+    - Preserve the common `ExecutionResult` fields: response text, input/output token counts, latency, estimated cost, status, and error message
+    - _Requirements: 4.1, 4.2, 4.6, 4.7, 4.9, 4.10, 4.11_
+
+  - [ ] 3.5 Write tests for provider adapters
     - Create `backend/tests/test_adapters/test_base.py` — verify `ProviderAdapter` cannot be instantiated directly; verify `ExecutionResult` fields are accessible by name
     - Create `backend/tests/test_adapters/test_gemini_adapter.py` — use `httpx` mock (`respx` or `unittest.mock`) for all HTTP calls:
       - Missing `GEMINI_API_KEY` raises `ConfigurationError`
@@ -168,18 +179,29 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 11: Error Containment** — for any provider error or timeout, result is an `ExecutionResult` not a raised exception; **Validates: Requirements 4.6, 4.7, 4.9**
       - **Property 12: No API Key Exposure** — for any error condition, the `GEMINI_API_KEY` value does not appear as a substring in `error_message`, response fields, or the request URL; **Validates: Requirements 4.10**
     - Create `backend/tests/test_adapters/test_ollama_adapter.py` — mirror structure of the Gemini tests; Properties 9, 10, 11 apply
-    - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6, 4.7, 4.9, 4.10_
+    - Create `backend/tests/test_adapters/test_groq_adapter.py` using mocked HTTP responses:
+      - Missing `GROQ_API_KEY` raises `ConfigurationError`
+      - Successful response extracts `choices[0].message.content`
+      - `usage.prompt_tokens` and `usage.completion_tokens` map correctly
+      - Cost uses registered model pricing and is rounded to 10 decimal places
+      - HTTP 429, other HTTP errors, timeout, and malformed response return contained failures
+      - Response text is truncated to 1,000,000 characters
+      - The API key is absent from the request URL, logs, error messages, and response data
+      - All failures return `ExecutionResult`, never an unhandled exception
+    - Reuse the existing adapter fixtures and shared cost, latency, error-containment, and credential-exposure properties; do not add provider-specific test infrastructure
+    - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6, 4.7, 4.9, 4.10, 4.11_
 
-  - [ ]* 3.5 Run provider adapter property tests
+  - [ ]* 3.6 Run provider adapter property tests
     - Execute `pytest backend/tests/test_adapters/ -v --tb=short`
     - **Property 9: Cost Calculation Invariant** — **Validates: Requirements 4.2**
     - **Property 10: Execution Latency Non-Negativity** — **Validates: Requirements 4.2**
     - **Property 11: Error Containment** — **Validates: Requirements 4.6, 4.7, 4.9**
     - **Property 12: No API Key Exposure** — **Validates: Requirements 4.10**
 
-  - [ ] 3.6 Phase 3 Checkpoint — verify adapter behaviour with missing env vars
+  - [ ] 3.7 Phase 3 Checkpoint — verify adapter behaviour with missing env vars
     - In a Python shell, instantiate `GeminiAdapter()` with `GEMINI_API_KEY` unset and confirm `ConfigurationError` is raised
     - Instantiate `OllamaAdapter()` with `OLLAMA_BASE_URL` unset and confirm `ConfigurationError` is raised
+    - Instantiate `GroqAdapter()` with `GROQ_API_KEY` unset and confirm `ConfigurationError` is raised
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 4. Phase 4: Query Intelligence
@@ -293,7 +315,7 @@ Work follows a strict dependency order: DB models → services → routers → t
 - [ ] 6. Phase 6: Execution Engine
   - [ ] 6.1 Create the Execution Engine orchestrator
     - Create `backend/app/adapters/engine.py`:
-      - `def resolve_adapter(provider_name: str) -> ProviderAdapter` — maps `"gemini"` → `GeminiAdapter()`, `"ollama"` → `OllamaAdapter()`; raises `ConfigurationError` for unknown providers
+      - `def resolve_adapter(provider_name: str) -> ProviderAdapter` — maps `"gemini"` → `GeminiAdapter()`, `"ollama"` → `OllamaAdapter()`, `"groq"` → `GroqAdapter()`; raises `ConfigurationError` for unknown providers
       - `async def execute_request(routing_decision_id: int, prompt: str, model: Model, db: Session) -> Execution`:
         1. Record start time with `time.monotonic()`
         2. Resolve adapter via `resolve_adapter(model.provider_name)`
@@ -583,7 +605,7 @@ Work follows a strict dependency order: DB models → services → routers → t
 
   - [ ] 11.5 Deployment preparation and documentation
     - Create `backend/requirements.txt` install instructions in `README.md` (if not already present): `cd backend && python -m venv .venv && .venv\Scripts\Activate.ps1 && pip install -r requirements.txt`
-    - Document all required `backend/.env` variables: `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `GEMINI_API_KEY`, `OLLAMA_BASE_URL`, `ROUTING_POLICY`, `BASELINE_MODEL_ID` (optional), `FALLBACK_MODEL_ID` (optional), `ESCALATION_CONFIDENCE_THRESHOLD`
+    - Document all required `backend/.env` variables: `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `GEMINI_API_KEY`, `OLLAMA_BASE_URL`, `GROQ_API_KEY`, `ROUTING_POLICY`, `BASELINE_MODEL_ID` (optional), `FALLBACK_MODEL_ID` (optional), `ESCALATION_CONFIDENCE_THRESHOLD`
     - Document `frontend/.env.local` required variable: `VITE_API_URL`
     - Verify `python -m testing.create_tables` (run from `backend/`) creates all six tables cleanly on a fresh `neuroroute` database, and that `python -m testing.migrate_requests_table` then reports nothing left to apply
     - _Requirements: 1.6, 4.4, 4.5, 5.3_
@@ -623,10 +645,10 @@ Work follows a strict dependency order: DB models → services → routers → t
     { "id": 2, "tasks": ["1.4", "1.4a"] },
     { "id": 3, "tasks": ["1.5", "1.6"] },
     { "id": 4, "tasks": ["2.1", "3.1", "4.1"] },
-    { "id": 5, "tasks": ["2.2", "3.2", "3.3", "4.2", "5.3"] },
-    { "id": 6, "tasks": ["2.3", "3.4", "4.3", "5.1"] },
-    { "id": 7, "tasks": ["2.4", "3.5", "4.4", "5.2"] },
-    { "id": 8, "tasks": ["5.4", "6.2"] },
+    { "id": 5, "tasks": ["2.2", "3.2", "3.3", "3.4", "4.2", "5.3"] },
+    { "id": 6, "tasks": ["2.3", "3.5", "4.3", "5.1"] },
+    { "id": 7, "tasks": ["2.4", "3.6", "4.4", "5.2"] },
+    { "id": 8, "tasks": ["3.7", "5.4", "6.2"] },
     { "id": 9, "tasks": ["5.5", "6.1", "7.3"] },
     { "id": 10, "tasks": ["6.3", "7.1"] },
     { "id": 11, "tasks": ["6.4", "7.2"] },

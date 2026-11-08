@@ -59,4 +59,11 @@ class ConflictError(NeuroRouteError):
     """The operation conflicts with existing data. Maps to HTTP 409.
 
     Requirements 1.4, 6.4.
+
+    ``field`` optionally names the conflicting field (e.g. "identifier").
+    ``str(exc)`` is always just the message, so the response body is unchanged.
     """
+
+    def __init__(self, message: str, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field

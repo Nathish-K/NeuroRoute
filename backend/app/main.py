@@ -13,9 +13,11 @@ from app.exceptions import (
     ValidationError,
 )
 from app.routers.requests import router as requests_router
+from app.routers.models import router as models_router
 
 app = FastAPI()
 app.include_router(requests_router)
+app.include_router(models_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],

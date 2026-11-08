@@ -16,7 +16,7 @@ NeuroRoute MVP is an adaptive AI inference architecture that routes each user pr
 - **Routing_Engine**: The backend subsystem (`backend/app/routing/`) that selects a model for a given request based on complexity, cost, and latency signals.
 - **Routing_Policy**: A named, configurable set of weights that governs how the Routing_Engine balances cost, latency, and quality objectives.
 - **Execution_Engine**: The backend subsystem (`backend/app/adapters/`) that dispatches a prompt to a specific LLM provider and captures the response.
-- **Provider_Adapter**: A concrete implementation of the provider interface (e.g. `gemini_adapter.py`, `ollama_adapter.py`) used by the Execution_Engine.
+- **Provider_Adapter**: A concrete implementation of the provider interface (e.g. `gemini_adapter.py`, `ollama_adapter.py`, `groq_adapter.py`) used by the Execution_Engine.
 - **Evaluation_Service**: The backend subsystem (`backend/app/evaluation/`) that scores a completed execution for quality and signals when escalation is required.
 - **Feedback_Service**: The backend subsystem (`backend/app/feedback/`) that stores user-submitted feedback alongside the relevant request and routing decision.
 - **Baseline_Router**: A deterministic routing mode that always selects the same fixed model, used for performance comparison.
@@ -25,7 +25,7 @@ NeuroRoute MVP is an adaptive AI inference architecture that routes each user pr
 - **Execution_Record**: A database record (`executions` table) that captures the provider response, token counts, latency in milliseconds, and estimated cost in USD.
 - **Evaluation_Record**: A database record (`evaluations` table) that captures the quality score and confidence level for a completed execution.
 - **Feedback_Record**: A database record (`feedback` table) that stores a user rating and optional comment linked to a specific request.
-- **LLM_Provider**: An external service that accepts a prompt and returns a text response (e.g. Google Gemini, a locally-hosted Ollama instance).
+- **LLM_Provider**: An external service that accepts a prompt and returns a text response (e.g. Google Gemini, a locally-hosted Ollama instance, or Groq).
 - **Token**: The unit of input/output measurement used by LLM providers for billing.
 - **Escalation**: The process of re-routing a request to a more capable model when quality evaluation confidence falls below the configured threshold.
 
@@ -120,6 +120,7 @@ NeuroRoute MVP is an adaptive AI inference architecture that routes each user pr
 8. IF a provider error or timeout occurs and a fallback model is configured via the `FALLBACK_MODEL_ID` environment variable, THEN THE Execution_Engine SHALL retry the prompt using the fallback model and record both the failed attempt and the fallback attempt as separate Execution_Records.
 9. IF the required environment variable for a provider is absent or empty at the time of a dispatch request, THEN THE Execution_Engine SHALL reject the request and return an error payload indicating the missing configuration, without raising an unhandled exception.
 10. THE Execution_Engine SHALL never expose raw provider API keys in logs, error messages, or API responses.
+11. THE Execution_Engine SHALL support dispatching prompts to the Groq API through the same `Provider_Adapter` interface, reading the API key from the `GROQ_API_KEY` environment variable in `backend/.env`; the adapter SHALL use Groq's documented OpenAI-compatible chat-completions endpoint and map its response to the common `ExecutionResult` contract. It SHALL capture response text, input and output token counts, non-negative latency, registry-priced estimated cost rounded to 10 decimal places, execution status, and errors; handle HTTP errors including 429 rate limits, timeouts, malformed responses, and missing configuration without unhandled exceptions; and never expose the API key in logs, error messages, response data, or request URLs.
 
 **Correctness Properties**
 

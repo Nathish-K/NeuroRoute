@@ -4,7 +4,7 @@
 
 NeuroRoute MVP extends the existing React 19 + FastAPI + MySQL application with six new backend subsystems that form an adaptive AI inference pipeline. A single `POST /api/requests/` call now orchestrates the full chain: the Intelligence Service classifies the prompt's complexity, the Routing Engine selects the optimal LLM based on configurable policy, the Execution Engine dispatches the prompt and captures metrics, and the Evaluation Service scores the response and triggers escalation when confidence is low. A Feedback Service collects user ratings, and an Observability Dashboard surfaces routing decisions, execution metrics, and quality scores to the frontend.
 
-All new subsystems are implemented as plain Python modules in `backend/app/`, following the existing SQLAlchemy 2.x / Pydantic v2 / FastAPI conventions. No new databases, caches, or message queues are introduced. External model calls to the Google Gemini API are free within the free tier's limits and billed per token beyond it; Ollama is free for local use.
+All new subsystems are implemented as plain Python modules in `backend/app/`, following the existing SQLAlchemy 2.x / Pydantic v2 / FastAPI conventions. No new databases, caches, or message queues are introduced. External model calls to the Google Gemini API are free within the free tier's limits and billed per token beyond it; Ollama is free for local use; Groq pricing is supplied by registered model records.
 
 ---
 
@@ -25,6 +25,7 @@ graph TD
     REG["Model Registry\napp/models/model.py"]
     GEM["Google Gemini API\n(external, free tier + paid)"]
     OLL["Ollama\n(local, free)"]
+    GROQ["Groq API\n(external)"]
     DB["MySQL: neuroroute"]
 
     User --> FE
@@ -35,6 +36,7 @@ graph TD
     ROUTE --> EXEC
     EXEC --> GEM
     EXEC --> OLL
+    EXEC --> GROQ
     EXEC --> EVAL
     EVAL --> ROUTE
     BE --> FB
@@ -315,6 +317,43 @@ class OllamaAdapter(ProviderAdapter):
     async def dispatch(self, prompt: str, model_name: str) -> ExecutionResult: ...
 ```
 
+**`groq_adapter.py`**
+
+```python
+class GroqAdapter(ProviderAdapter):
+    """
+    Calls Groq's OpenAI-compatible chat-completions API with httpx; no provider
+    SDK or OpenAI provider is introduced. Reads GROQ_API_KEY from environment
+    and raises ConfigurationError if it is absent or empty.
+
+    Official Groq API contract verified against the current Groq API reference
+    (https://console.groq.com/docs/api-reference), OpenAI compatibility guide
+    (https://console.groq.com/docs/openai), error guide
+    (https://console.groq.com/docs/errors), and rate-limit guide
+    (https://console.groq.com/docs/rate-limits):
+      endpoint: POST https://api.groq.com/openai/v1/chat/completions
+      authentication: Authorization: Bearer <GROQ_API_KEY>
+      request body: {
+          "model": model_name,
+          "messages": [{"role": "user", "content": prompt}]
+      }
+      response text: choices[0].message.content
+      input tokens: usage.prompt_tokens
+      output tokens: usage.completion_tokens
+      errors: structured {"error": {"message": ..., "type": ...}} bodies;
+              HTTP 429 indicates rate limiting and may include retry-after.
+
+    Enforces the same 30-second timeout and 1,000,000-character response
+    truncation as the other adapters. Calculates estimated_cost from pricing
+    supplied by the registered model, rounded to 10 decimal places. Maps
+    non-2xx responses (including 429), malformed responses, and provider
+    failures to status="failed"; maps httpx.TimeoutException to
+    status="timed_out"; and never exposes the API key in URLs, logs, errors,
+    or response data.
+    """
+    async def dispatch(self, prompt: str, model_name: str) -> ExecutionResult: ...
+```
+
 **`engine.py`** — Orchestrates dispatch and fallback
 
 ```python
@@ -325,7 +364,7 @@ async def execute_request(
     db: Session,
 ) -> ExecutionRecord:
     """
-    1. Resolve adapter from model.provider.
+    1. Resolve adapter from model.provider (Gemini, Ollama, or Groq).
     2. Dispatch prompt (30-second timeout).
     3. On success: persist Execution_Record with status="completed".
     4. On failure/timeout: persist with status="failed"/"timed_out".
@@ -1082,9 +1121,9 @@ HTTP 202 is returned only when the Routing Engine raises a `ServiceUnavailableEr
 
 ---
 
-### Property 12: No API Key Exposure
+### Property 12: No Provider API Key Exposure
 
-*For any* error condition (provider error, timeout, missing configuration), the Execution Engine SHALL not include any substring of the `GEMINI_API_KEY` value in logs, error messages, API responses, or outbound request URLs (the key is sent only in the `x-goog-api-key` header).
+*For any* error condition (provider error, timeout, missing configuration), the Execution Engine SHALL not include any substring of the configured provider credential (`GEMINI_API_KEY`, `GROQ_API_KEY`, or any future provider credential) in logs, error messages, API responses, or outbound request URLs. Gemini sends its key only in `x-goog-api-key`; Groq sends its key only in `Authorization: Bearer`.
 
 **Validates: Requirements 4.10**
 
@@ -1258,7 +1297,8 @@ backend/tests/
 ├── test_adapters/
 │   ├── test_base.py             ← Property 11
 │   ├── test_gemini_adapter.py   ← Properties 9, 10, 12
-│   └── test_ollama_adapter.py   ← Properties 9, 10
+│   ├── test_ollama_adapter.py   ← Properties 9, 10, 11
+│   └── test_groq_adapter.py     ← Groq adapter contract and error containment
 ├── test_evaluation/
 │   └── test_evaluator.py        ← Properties 13, 14
 ├── test_feedback/
@@ -1392,11 +1432,11 @@ The following packages must be added to `backend/requirements.txt`. Versions sho
 | `pymysql==1.2.3` | Already in use |
 | `python-dotenv==1.2.4` | Already in use |
 | `pydantic==2.14.2` | Ships with FastAPI |
-| `httpx==0.28.1` | Async HTTP client for the Gemini and Ollama adapters (no provider SDK is used) |
+| `httpx==0.28.1` | Async HTTP client for the Gemini, Ollama, and Groq adapters (no provider SDK is used) |
 | `hypothesis==6.170.14` | Property-based testing |
 | `pytest==9.2.0` | Test runner |
 | `pytest-asyncio==1.4.1.post1` | Async test support |
 
 `requirements.txt` has been created at `backend/requirements.txt` with all packages pinned. Run `pip install -r requirements.txt` from the `backend/` directory (with `.venv` activated) to install any missing packages into the virtual environment.
 
-> **Cost note:** The Gemini API has a free tier (no per-token charge, limited model access, lower rate limits) and a paid tier billed per token. Google may use free-tier content to improve its products, so do not send sensitive prompts on the free tier. HTTP 429 (rate limit) responses are handled as failed executions and can trigger the fallback model. Ollama is free and local. Register both providers in the Model Registry; per-token prices are registry data, so copy current prices from Google's pricing page when registering a Gemini model (use 0 while on the free tier) and set `ROUTING_POLICY=cost_optimised` to prefer Ollama when it is cheaper.
+> **Cost note:** The Gemini API has a free tier (no per-token charge, limited model access, lower rate limits) and a paid tier billed per token. Google may use free-tier content to improve its products, so do not send sensitive prompts on the free tier. HTTP 429 (rate limit) responses are handled as failed executions and can trigger the fallback model. Ollama is free and local. Groq pricing and limits are provider-account concerns; register the selected Groq model with its current pricing in the Model Registry. Per-token prices are registry data, not adapter constants.
