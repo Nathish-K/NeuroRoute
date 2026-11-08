@@ -11,7 +11,7 @@ Work follows a strict dependency order: DB models → services → routers → t
 ## Tasks
 
 - [ ] 1. Phase 1: Backend Foundation and Database Migrations
-  - [-] 1.1 Create `backend/requirements.txt` with pinned package versions
+  - [x] 1.1 Create `backend/requirements.txt` with pinned package versions
     - Create `backend/requirements.txt` with the following pinned versions:
       ```
       fastapi==0.162.0
@@ -21,20 +21,19 @@ Work follows a strict dependency order: DB models → services → routers → t
       python-dotenv==1.2.4
       pydantic==2.14.2
       httpx==0.28.1
-      openai==3.45.0
       hypothesis==6.170.14
       pytest==9.2.0
       pytest-asyncio==1.4.1.post1
     - This file must exist before any new import is added to source code
     - _Requirements: 4.1, 4.4, 4.5_
 
-  - [ ] 1.2 Create `backend/app/exceptions.py` with the full custom exception hierarchy
+  - [x] 1.2 Create `backend/app/exceptions.py` with the full custom exception hierarchy
     - Define `NeuroRouteError(Exception)` as the base
     - Add `ServiceUnavailableError`, `NoEligibleModelError(ServiceUnavailableError)`, `PersistenceError`, `ConfigurationError`, `ValidationError`, `NotFoundError`, `ConflictError` — all inheriting from `NeuroRouteError`
     - Each class must include a docstring stating its mapped HTTP status code
     - _Requirements: 3.6, 3.7, 3.9, 5.3, 6.2, 6.3, 6.4_
 
-  - [ ] 1.3 Create SQLAlchemy ORM models for all new tables
+  - [x] 1.3 Create SQLAlchemy ORM models for all new tables
     - Create `backend/app/models/model.py` — `Model` table with: `id`, `identifier` (String 128, UNIQUE), `provider_name` (String 128), `model_name` (String 256), `max_context_length` (Integer), `cost_per_input_token` (Numeric 20,10), `cost_per_output_token` (Numeric 20,10), `capability_tier` (Integer, default=1; 1=LOW, 2=MEDIUM, 3=HIGH), `enabled` (Boolean, default=True), `created_at` (DateTime, default=func.now()); include `routing_decisions` relationship
     - Create `backend/app/models/routing_decision.py` — `RoutingDecision` table with: `id`, `request_id` (FK→requests.id), `model_id` (FK→models.id), `policy` (String 50), `complexity_class` (String 20), `estimated_cost` (Numeric 20,10), `explanation` (String 500), `created_at`; include `request`, `model`, `executions` relationships
     - Create `backend/app/models/execution.py` — `Execution` table with: `id`, `routing_decision_id` (FK→routing_decisions.id), `response_text` (Text(4294967295) — LONGTEXT), `input_token_count` (Integer, nullable), `output_token_count` (Integer, nullable), `latency_ms` (Integer, nullable), `estimated_cost` (Numeric 20,10, nullable), `status` (String 20, default="pending"), `error_message` (String 1000, nullable), `is_escalated` (Boolean, default=False), `created_at`; include `routing_decision`, `evaluation` relationships
@@ -43,27 +42,43 @@ Work follows a strict dependency order: DB models → services → routers → t
     - All models import `Base` from `backend/app/database/connection.py`
     - _Requirements: 1.8, 3.8, 4.3, 5.2, 6.7_
 
-  - [ ] 1.4 Extend the existing `Request` model and update `create_tables.py`
-    - Modify `backend/app/models/request.py`: add `complexity_class: Mapped[str | None]` (String 20, nullable), `end_to_end_latency_ms: Mapped[int | None]` (Integer, nullable), `created_at: Mapped[datetime]` (DateTime, default=func.now()), `routing_decisions` (relationship list), `feedback` (relationship, uselist=False)
+  - [x] 1.4 Extend the existing `Request` model and update `create_tables.py`
+    - Modify `backend/app/models/request.py`: add `complexity_class: Mapped[str | None]` (String 20, nullable), `end_to_end_latency_ms: Mapped[int | None]` (Integer, nullable), `created_at: Mapped[datetime]` (DateTime, `server_default=func.now()`, nullable=False), `routing_decisions` (relationship list), `feedback` (relationship, uselist=False)
     - Update `backend/testing/create_tables.py` to import all five new model files (`model`, `routing_decision`, `execution`, `evaluation`, `feedback`) before calling `Base.metadata.create_all()`
-    - Run `create_tables.py` to verify all six tables are created in MySQL without errors
+    - Run `python -m testing.create_tables` from `backend/` to verify the five NEW tables (`models`, `routing_decisions`, `executions`, `evaluations`, `feedback`) are created in MySQL without errors. `create_all()` never alters the existing `requests` table; its new columns are added by Task 1.4a
     - _Requirements: 1.8, 8.1, 8.5_
 
-  - [ ] 1.5 Register custom exception handlers in `backend/app/main.py`
+  - [x] 1.4a Controlled `ALTER TABLE` migration for the existing `requests` table
+    - Create `backend/testing/migrate_requests_table.py` (and an empty `backend/testing/__init__.py` if needed); run it from `backend/` with `python -m testing.migrate_requests_table` (dry run, the default) or `python -m testing.migrate_requests_table --apply`
+    - Pure function `build_migration_statements(existing_columns: set[str]) -> list[str]` returns, in this order, only the statements for columns that are missing:
+      - `ALTER TABLE requests ADD COLUMN complexity_class VARCHAR(20) NULL`
+      - `ALTER TABLE requests ADD COLUMN end_to_end_latency_ms INT NULL`
+      - `ALTER TABLE requests ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    - Statements are static strings executed with `sqlalchemy.text()`; nothing from user input is interpolated. The table name defaults to `requests`; an optional `--table` argument is accepted only if it matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` (used to rehearse on a scratch copy)
+    - Default mode is a dry run: print the row count, the existing columns, and the statements that WOULD run. Execute only when `--apply` is passed
+    - Idempotent: existing columns are skipped, so a second run (or a run against a database created by `create_all()`) executes nothing
+    - Never issue `DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, or `CREATE TABLE` against `requests`. Legacy rows get NULL `complexity_class` and `end_to_end_latency_ms`, and `created_at` equal to the migration time
+    - Before `--apply`, record the row count and a checksum of `(id, prompt, status)`; afterwards assert both are unchanged, all three columns exist, and `created_at` is non-NULL for every legacy row; exit non-zero on any mismatch
+    - Take a `mysqldump` backup of `requests` before applying to the live database. Backup files must never be committed (`backups/` and `*.dump` are gitignored)
+    - Rehearse on a scratch copy of the table first, then apply to the live `requests` table; drop only the scratch table afterwards
+    - Create `backend/tests/test_migration/__init__.py` and `test_migrate_requests_table.py`: unit tests for `build_migration_statements` (all missing -> 3 statements; only `created_at` missing -> 1; none missing -> empty list), a test that no generated statement contains `DROP`, `TRUNCATE`, `DELETE`, or `UPDATE`, and a test that `--table` rejects `requests; DROP TABLE x`. The MySQL apply is verified manually at Checkpoint 1.7 because SQLite cannot add a column with a `CURRENT_TIMESTAMP` default
+    - _Requirements: 8.5, 8.6_
+
+  - [x] 1.5 Register custom exception handlers in `backend/app/main.py`
     - Import all custom exception classes from `app.exceptions`
     - Add one `@app.exception_handler` per class: `NotFoundError→404`, `ConflictError→409`, `ValidationError→422`, `ServiceUnavailableError→503`, `NoEligibleModelError→503`, `PersistenceError→500`, `ConfigurationError→500`
     - Each handler returns `JSONResponse({"detail": str(exc)})` with the appropriate status code
     - Do NOT alter existing router registrations, CORS middleware, or the health check endpoint
     - _Requirements: 3.6, 3.7, 3.9, 6.2, 6.3_
 
-  - [ ] 1.6 Scaffold the `backend/tests/` directory and shared pytest fixtures
+  - [x] 1.6 Scaffold the `backend/tests/` directory and shared pytest fixtures
     - Create `backend/tests/conftest.py` with: an in-memory SQLite engine fixture (`engine`), a test DB session fixture (`db_session`) that creates all tables and tears down after each test, and a `test_client` fixture using FastAPI's `TestClient` with the `db_session` dependency overridden
     - Create `backend/pytest.ini` (or add `[tool.pytest.ini_options]` to `pyproject.toml`) with `asyncio_mode = "auto"` for pytest-asyncio
     - Create `backend/tests/__init__.py` and empty `__init__.py` files in `tests/test_models/`, `tests/test_intelligence/`, `tests/test_routing/`, `tests/test_adapters/`, `tests/test_evaluation/`, `tests/test_feedback/`, `tests/test_pipeline/`
     - _Requirements: 2.8, 3.5, 4.5_
 
-  - [ ] 1.7 Phase 1 Checkpoint — verify foundation is solid
-    - Run `python backend/testing/create_tables.py` and confirm all six tables exist in MySQL with correct columns
+  - [x] 1.7 Phase 1 Checkpoint — verify foundation is solid
+    - From `backend/`, run `python -m testing.create_tables` and `python -m testing.migrate_requests_table` (dry run); confirm all six tables exist, the dry run reports nothing left to apply, and `requests` has `id, prompt, status, complexity_class, end_to_end_latency_ms, created_at` with the original rows unchanged (same row count and `(id, prompt, status)` checksum)
     - Run `pytest backend/tests/ -q` and confirm zero test failures (only collection, no tests yet)
     - Manually call `POST /api/requests/` via Swagger UI at `http://127.0.0.1:8000/docs` and confirm it still returns `{id, prompt, status}` unchanged
     - Ensure all tests pass, ask the user if questions arise.
@@ -110,16 +125,20 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `class ProviderAdapter(ABC)` with `@abstractmethod async def dispatch(self, prompt: str, model_name: str) -> ExecutionResult`
     - _Requirements: 4.1_
 
-  - [ ] 3.2 Create `OpenAIAdapter`
-    - Create `backend/app/adapters/openai_adapter.py`
-    - `OpenAIAdapter(ProviderAdapter)`:
-      - `__init__`: reads `OPENAI_API_KEY` from env; raises `ConfigurationError("OPENAI_API_KEY is not set")` if absent or empty; never stores the raw key in an instance variable named such that it would appear in `repr()`
+  - [ ] 3.2 Create `GeminiAdapter`
+    - Create `backend/app/adapters/gemini_adapter.py`
+    - `GeminiAdapter(ProviderAdapter)`:
+      - `__init__`: reads `GEMINI_API_KEY` from env; raises `ConfigurationError("GEMINI_API_KEY is not set")` if absent or empty; never stores the raw key in an instance variable named such that it would appear in `repr()`
       - `async dispatch(prompt, model_name) -> ExecutionResult`:
-        - Uses `httpx.AsyncClient(timeout=30.0)` to call the OpenAI chat completions endpoint
+        - Uses `httpx.AsyncClient(timeout=30.0)` to POST `https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent` with body `{"contents": [{"parts": [{"text": prompt}]}]}`
+        - Sends the key ONLY in the `x-goog-api-key` header, never as a `?key=` query parameter (httpx errors and logs include the request URL)
+        - `response_text` = the text of all parts of `candidates[0].content`
+        - `input_token_count` = `usageMetadata.promptTokenCount`; `output_token_count` = `usageMetadata.candidatesTokenCount` + `usageMetadata.thoughtsTokenCount` (a missing field counts as 0; thinking tokens are billed as output)
         - Truncates `response_text` to 1,000,000 characters
         - Calculates `estimated_cost` as `(input_tokens × cost_per_input_token) + (output_tokens × cost_per_output_token)` rounded to 10 decimal places — pricing values passed in from the caller (model record)
-        - Returns `ExecutionResult(status="failed", error_message=...)` on non-2xx; `status="timed_out"` on `httpx.TimeoutException`
-        - Never propagates unhandled exceptions; never includes the API key substring in any error message or log
+        - Returns `ExecutionResult(status="failed", error_message=...)` on non-2xx (including HTTP 429 rate-limit or quota errors) and when the prompt is blocked (`promptFeedback.blockReason` set or no candidates); `status="timed_out"` on `httpx.TimeoutException`
+        - Never propagates unhandled exceptions; never includes the API key substring in any error message, log, or request URL
+        - The `usageMetadata` field names were checked against the Google `generateContent` reference; confirm the endpoint path and request body against the current Google docs when implementing
     - _Requirements: 4.1, 4.2, 4.4, 4.6, 4.7, 4.9, 4.10_
 
   - [ ] 3.3 Create `OllamaAdapter`
@@ -129,23 +148,26 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `async dispatch(prompt, model_name) -> ExecutionResult`:
         - Uses `httpx.AsyncClient(timeout=30.0)` to POST to `{OLLAMA_BASE_URL}/api/generate`
         - Truncates `response_text` to 1,000,000 characters
-        - Calculates `estimated_cost` using same formula as OpenAI adapter
+        - Calculates `estimated_cost` using same formula as Gemini adapter
         - Returns `ExecutionResult(status="failed")` on non-2xx; `status="timed_out"` on `httpx.TimeoutException`
         - Never propagates unhandled exceptions
     - _Requirements: 4.1, 4.2, 4.5, 4.6, 4.7, 4.9_
 
   - [ ] 3.4 Write tests for provider adapters
     - Create `backend/tests/test_adapters/test_base.py` — verify `ProviderAdapter` cannot be instantiated directly; verify `ExecutionResult` fields are accessible by name
-    - Create `backend/tests/test_adapters/test_openai_adapter.py` — use `httpx` mock (`respx` or `unittest.mock`) for all HTTP calls:
-      - Missing `OPENAI_API_KEY` raises `ConfigurationError`
+    - Create `backend/tests/test_adapters/test_gemini_adapter.py` — use `httpx` mock (`respx` or `unittest.mock`) for all HTTP calls:
+      - Missing `GEMINI_API_KEY` raises `ConfigurationError`
       - Happy path returns `ExecutionResult(status="completed")` with correct fields
       - Non-2xx response returns `status="failed"` without raising
       - Simulated timeout returns `status="timed_out"` without raising
+      - Token mapping: `input_token_count` equals `promptTokenCount`; `output_token_count` equals `candidatesTokenCount` + `thoughtsTokenCount`, and a missing `thoughtsTokenCount` counts as 0
+      - HTTP 429 and a blocked prompt (`promptFeedback.blockReason`, no candidates) return `status="failed"` with a plain-language message
+      - The request carries the key only in the `x-goog-api-key` header; the request URL has no `key=` query parameter
       - **Property 9: Cost Calculation Invariant** — for any token counts and pricing, `estimated_cost == (input × cost_in) + (output × cost_out)` rounded to 10dp; **Validates: Requirements 4.2**
       - **Property 10: Execution Latency Non-Negativity** — for any dispatch result, `latency_ms >= 0`; **Validates: Requirements 4.2**
       - **Property 11: Error Containment** — for any provider error or timeout, result is an `ExecutionResult` not a raised exception; **Validates: Requirements 4.6, 4.7, 4.9**
-      - **Property 12: No API Key Exposure** — for any error condition, the `OPENAI_API_KEY` value does not appear as a substring in `error_message` or response fields; **Validates: Requirements 4.10**
-    - Create `backend/tests/test_adapters/test_ollama_adapter.py` — mirror structure of OpenAI tests; Properties 9, 10, 11 apply
+      - **Property 12: No API Key Exposure** — for any error condition, the `GEMINI_API_KEY` value does not appear as a substring in `error_message`, response fields, or the request URL; **Validates: Requirements 4.10**
+    - Create `backend/tests/test_adapters/test_ollama_adapter.py` — mirror structure of the Gemini tests; Properties 9, 10, 11 apply
     - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6, 4.7, 4.9, 4.10_
 
   - [ ]* 3.5 Run provider adapter property tests
@@ -156,7 +178,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - **Property 12: No API Key Exposure** — **Validates: Requirements 4.10**
 
   - [ ] 3.6 Phase 3 Checkpoint — verify adapter behaviour with missing env vars
-    - In a Python shell, instantiate `OpenAIAdapter()` with `OPENAI_API_KEY` unset and confirm `ConfigurationError` is raised
+    - In a Python shell, instantiate `GeminiAdapter()` with `GEMINI_API_KEY` unset and confirm `ConfigurationError` is raised
     - Instantiate `OllamaAdapter()` with `OLLAMA_BASE_URL` unset and confirm `ConfigurationError` is raised
     - Ensure all tests pass, ask the user if questions arise.
 
@@ -170,14 +192,21 @@ Work follows a strict dependency order: DB models → services → routers → t
 
   - [ ] 4.2 Create the Intelligence Service classifier module
     - Create `backend/app/intelligence/classifier.py`:
-      - `ComplexityClass = Literal["simple", "moderate", "complex"]`
+      - `ComplexityClass = Literal["simple", "moderate", "complex"]` (tiers: `simple` = LOW, `moderate` = MEDIUM, `complex` = HIGH; the stored and returned labels are unchanged)
       - `ClassificationResult(BaseModel)`: `complexity_class: ComplexityClass`, `explanation: str` (min_length=10, max_length=300)
       - `DOMAIN_KEYWORDS: frozenset[str]` — at least 30 terms covering medical (diagnosis, prognosis, etiology, …), legal (tort, habeas corpus, jurisdiction, …), financial (amortisation, derivatives, arbitrage, …), scientific (photosynthesis, quantum, thermodynamics, …), and engineering (impedance, tensile, torque, …) domains
       - `REASONING_CONNECTIVES: frozenset[str]` — {"first", "then", "therefore", "because", "however", "additionally", "finally", "consequently", "furthermore", "although", "whereas"}
+      - `SYNTHESIS_INDICATORS: frozenset[str]` — {"compare", "contrast", "versus", "synthesize", "synthesise", "critique", "evaluate", "literature", "sources", "research", "tradeoffs"}
+      - All term lists are matched case-insensitively against the output of `tokenise()`; multi-word entries match consecutive tokens; each distinct entry counts once
       - `classify_prompt(prompt: str) -> ClassificationResult`:
-        - Raises `ValueError("Prompt must not be empty")` if prompt is empty after stripping
-        - Rule order: **complex** if token_count ≥ 50 AND (≥2 domain keywords OR ≥3 reasoning connectives OR prompt contains "source" or "research" with multiple distinct topics); **moderate** if token_count < 50 AND has domain keywords, OR token_count ≥ 50 AND has ≥2 reasoning connectives; **simple** otherwise
-        - Returns `ClassificationResult` with a human-readable explanation (10–300 chars)
+        - Raises `ValueError("Prompt must not be empty")` if the prompt is empty after stripping, and `ValueError("Prompt exceeds the maximum allowed length")` if it has more than 1000 tokens
+        - Computes N = token count, D = distinct domain terms found, R = distinct reasoning connectives found, S = distinct synthesis indicators found
+        - Applies these rules in order, first match wins (identical to Requirements 2.3-2.5 and design.md):
+          1. HIGH / `complex`: R >= 3, OR S >= 2, OR D >= 3, OR N >= 200
+          2. LOW / `simple`: N < 50 AND D == 0 AND R < 2 AND S == 0
+          3. MEDIUM / `moderate`: every other prompt (the fallback for unclassified prompts)
+        - Explanation template: `"Classified as {class} ({tier}): {matched rule}; tokens={N}, domain_terms={D}, reasoning_steps={R}, synthesis_indicators={S}."` (10-300 characters)
+        - Pure and deterministic: no randomness, no I/O, no model call
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
 
   - [ ] 4.3 Write tests for the Intelligence Service
@@ -187,11 +216,14 @@ Work follows a strict dependency order: DB models → services → routers → t
       - "Hello, world!" returns ["Hello", "world"]
       - Whitespace normalisation is consistent
     - Create `backend/tests/test_intelligence/test_classifier.py`:
-      - Unit: "What is 2+2?" → `simple`; a 3-step medical prompt → `complex`; a 2-step coding prompt with domain terms → `moderate`; empty prompt raises `ValueError`; prompt > 1000 tokens raises `ValueError`
+      - Unit, one test per rule and boundary: "What is 2+2?" → `simple`; 49 plain tokens → `simple`; 50 plain tokens → `moderate` (fallback); 199 plain tokens → `moderate`; 200 plain tokens → `complex`
+      - Unit, indicator thresholds: exactly 2 distinct reasoning connectives → `moderate`, exactly 3 → `complex`; exactly 1 domain term → `moderate`, exactly 3 → `complex`; exactly 1 synthesis indicator → `moderate`, exactly 2 → `complex`
+      - Unit, counting rules: a repeated term counts once; matching is case-insensitive; a short prompt with 3 distinct reasoning connectives is `complex` regardless of length
+      - Unit, errors: empty or whitespace-only prompt raises `ValueError`; 1001 tokens raises `ValueError`, 1000 tokens does not
       - PBT (Hypothesis, max_examples=100):
         - **Property 4: Classification Returns Valid Output** — for any non-empty prompt ≤ 1000 tokens, result is one of `{"simple","moderate","complex"}` and explanation length is in [10, 300]; **Validates: Requirements 2.1, 2.3, 2.4, 2.5**
         - **Property 5: Classification Idempotence** — for any valid prompt, `classify_prompt(p) == classify_prompt(p)` both times without config change; **Validates: Requirements 2.1**
-        - Mutual exclusivity: exactly one of the three classes is returned per call
+        - Mutual exclusivity and exhaustiveness: exactly one of the three classes is returned per call, and any prompt generated by `short_prompt_strategy()` (under 50 tokens, no listed terms) is `simple`
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8_
 
   - [ ]* 4.4 Run Intelligence Service property tests
@@ -261,7 +293,7 @@ Work follows a strict dependency order: DB models → services → routers → t
 - [ ] 6. Phase 6: Execution Engine
   - [ ] 6.1 Create the Execution Engine orchestrator
     - Create `backend/app/adapters/engine.py`:
-      - `def resolve_adapter(provider_name: str) -> ProviderAdapter` — maps `"openai"` → `OpenAIAdapter()`, `"ollama"` → `OllamaAdapter()`; raises `ConfigurationError` for unknown providers
+      - `def resolve_adapter(provider_name: str) -> ProviderAdapter` — maps `"gemini"` → `GeminiAdapter()`, `"ollama"` → `OllamaAdapter()`; raises `ConfigurationError` for unknown providers
       - `async def execute_request(routing_decision_id: int, prompt: str, model: Model, db: Session) -> Execution`:
         1. Record start time with `time.monotonic()`
         2. Resolve adapter via `resolve_adapter(model.provider_name)`
@@ -409,7 +441,7 @@ Work follows a strict dependency order: DB models → services → routers → t
 
 - [ ] 9. Phase 9: End-to-End Pipeline Integration
   - [ ] 9.1 Expand Pydantic schemas in `backend/app/schemas/requests.py`
-    - Add these new schemas while keeping existing `RequestCreate` and `RequestResponse` intact:
+    - Add these new schemas while keeping `RequestResponse` intact (`RequestCreate` validation is handled by Task 9.1a):
       - `PipelineResponse`: `id`, `prompt`, `status`, `complexity_class`, `routing` (RoutingDecisionResponse), `execution` (ExecutionResponse), `evaluation` (EvaluationResponse | None), `end_to_end_latency_ms`, `step_errors` (list[dict])
       - `DegradedResponse`: `id`, `prompt`, `status`, `message`
       - `RequestSummaryResponse`: `id`, `prompt`, `status`, `complexity_class`, `selected_model_name`, `routing_policy`, `latency_ms`, `estimated_cost`, `quality_score`, `created_at`; `ConfigDict(from_attributes=True)`
@@ -417,39 +449,46 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `AggregateMetricsResponse`: `total_count`, `mean_latency_ms`, `mean_estimated_cost`, `mean_quality_score`, `adaptive_mean_latency_ms`, `adaptive_mean_cost`, `baseline_mean_latency_ms`, `baseline_mean_cost`
     - _Requirements: 8.2, 8.4, 7.8, 7.9_
 
+  - [x] 9.1a Add API-level prompt validation to `RequestCreate`
+    - Modify `backend/app/schemas/requests.py`: `RequestCreate.prompt` becomes `str = Field(min_length=1, max_length=1000)` plus a validator that rejects a prompt that is empty after stripping whitespace. The stored prompt stays the original, unmodified text. The 1000 limit is in characters, matching `requests.prompt String(1000)` and `tech.md`
+    - Keep `RequestResponse` unchanged; valid requests keep the exact existing request and response shape
+    - This is the only change to `RequestCreate`. It must land before Task 9.2 so the pipeline never receives an invalid prompt, and a rejected request must not create a `requests` row
+    - Create `backend/tests/test_pipeline/test_prompt_validation.py`: empty prompt -> 422; whitespace-only -> 422; missing `prompt` field -> 422; 1000 characters -> 200; 1001 characters -> 422; none of the 422 cases creates a row; a normal prompt still returns `{id, prompt, status}`
+    - PBT (Hypothesis, max_examples=100): any string of 1 to 1000 characters that contains a non-whitespace character is accepted; any string longer than 1000 characters is rejected with 422
+    - _Requirements: 8.7_
+
   - [ ] 9.2 Implement the pipeline orchestrator in `backend/app/routers/requests.py`
     - **MODIFY** `POST /` to orchestrate the full pipeline following this sequence:
-      1. Validate prompt (Pydantic: min_length=1, max_length=1000) → HTTP 422 on failure
+      1. Validate prompt (`RequestCreate`, Task 9.1a) → HTTP 422 on failure; nothing is persisted
       2. Persist `Request(status="pending")` → HTTP 500 on DB failure
       3. Record pipeline start time
       4. Call `classify_prompt(prompt)`:
-         - On `ServiceUnavailableError` AND Routing also unavailable → return HTTP 202 `DegradedResponse`
-         - On `ServiceUnavailableError` with Routing still available → use `complexity_class="moderate"` (fallback, no 202)
-         - On `ValueError` (empty prompt) → already caught by Pydantic
-      5. Call `route_request(request.id, complexity, db)`:
+         - On `ServiceUnavailableError` (or any Intelligence failure other than an invalid prompt) → use `complexity_class="moderate"` (MEDIUM fallback), append `{"step": "intelligence", ...}` to `step_errors`, and CONTINUE. Never return 202 for an Intelligence-only failure
+         - On `ValueError` (empty or over-length prompt) → HTTP 422 (normally already rejected in step 1)
+      5. Call `route_request(request.id, complexity, db)`; catch `NoEligibleModelError` BEFORE `ServiceUnavailableError` because it is a subclass:
          - On `NoEligibleModelError` → HTTP 503
          - On `PersistenceError` → HTTP 500
-         - On `ServiceUnavailableError` → return HTTP 202 `DegradedResponse`
+         - On `ServiceUnavailableError` (Routing Engine unavailable) → leave the request `pending` and return HTTP 202 `DegradedResponse`
       6. `await execute_request(routing_decision.id, prompt, model, db)`:
          - On error: append to `step_errors`, continue to evaluation
-      7. Call `evaluate_execution(execution, threshold)`:
-         - On `ServiceUnavailableError`: append to `step_errors`, evaluation=None
-         - If `escalation_flag=True`: call `handle_escalation()`, use returned execution if better
+      7. Call `evaluate_execution(execution, threshold)` inside a guard:
+         - If it fails for any reason after a COMPLETED execution exists → append `{"step": "evaluation", ...}` to `step_errors`, set `evaluation=None`, KEEP the execution record and its response text, and CONTINUE. Do not return 202 and do not set the request to `pending`
+         - If `escalation_flag=True`: call `handle_escalation()`, use the returned execution if better
       8. Update `Request.status = "completed"` (or `"partial"` if step_errors non-empty); set `complexity_class`, `end_to_end_latency_ms`
-      9. Return HTTP 200 `PipelineResponse`
-    - **MODIFY** `GET /` to return `list[RequestSummaryResponse]` (50 most recent by `created_at` desc), joining to get `selected_model_name` and `routing_policy` from the latest `RoutingDecision`; preserve backward-compatible JSON shape for existing fields
+      9. Return HTTP 200 `PipelineResponse` (when `status` is `partial`, `evaluation` may be null and `step_errors` lists the failures)
+    - **MODIFY** `GET /` to return `list[RequestSummaryResponse]` (50 most recent, ordered by `created_at` desc then `id` desc), joining to get `selected_model_name` and `routing_policy` from the latest `RoutingDecision`; legacy rows without routing data return null model and quality fields; preserve backward-compatible JSON shape for existing fields
     - **ADD** `GET /{request_id}` returning `RequestDetailResponse` with all linked records (null for unset); raise `NotFoundError` if not found
-    - **ADD** `GET /metrics` returning `AggregateMetricsResponse` computed with `func.count()` and `func.avg()` on completed executions; distinguish adaptive vs baseline by `RoutingDecision.policy`
+    - **ADD** `GET /metrics` (full path `GET /api/requests/metrics`) returning `AggregateMetricsResponse` computed with `func.count()` and `func.avg()` on completed executions; distinguish adaptive vs baseline by `RoutingDecision.policy`. Declare this route BEFORE `GET /{request_id}`, otherwise FastAPI treats "metrics" as a request id and returns 422
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 5.8, 5.9_
 
   - [ ] 9.3 Write integration and pipeline tests
     - Create `backend/tests/test_pipeline/test_orchestrator.py`:
       - Full pipeline smoke test with mocked adapters: POST valid prompt → HTTP 200 with all required fields populated
       - Mocked Routing unavailable → HTTP 202 with `status="pending"` and degraded message
-      - Mocked Intelligence unavailable, Routing available → HTTP 200, complexity_class="moderate" in response
+      - Mocked Intelligence unavailable, Routing available → HTTP 200, `complexity_class="moderate"`, an `intelligence` entry in `step_errors`, request status not `pending`, no 202
       - Execution failure with Routing/Intelligence available → HTTP 200 with `step_errors` populated and execution status="failed"
-      - Evaluation unavailable → HTTP 200, evaluation=None in response, step_errors populated
-      - `GET /api/requests/` returns results ordered by `created_at` desc
+      - Evaluation fails after a completed execution → HTTP 200 (not 202), `evaluation=None`, an `evaluation` entry in `step_errors`, request status `partial` (not `pending`), and the `Execution` row and its `response_text` are preserved and returned
+      - `GET /api/requests/` returns results ordered by `created_at` desc then `id` desc (legacy rows that share one timestamp stay newest-first)
       - `GET /api/requests/{id}` returns full detail; missing id → HTTP 404
       - **Property 19: Pipeline Latency Composition** (PBT) — for any completed pipeline, `end_to_end_latency_ms >= execution.latency_ms`; **Validates: Requirements 8.5**
       - **Property 20: Pipeline Response Completeness** (PBT) — for any successful pipeline run, response contains all required top-level fields; **Validates: Requirements 8.2**
@@ -495,7 +534,7 @@ Work follows a strict dependency order: DB models → services → routers → t
   - [ ] 10.5 Update `frontend/src/App.jsx` to wire all components
     - Add state variables: `selectedId`, `detail`, `metrics`, `comparison`, `lastSubmission`, `error`, `isPartiallyUnavailable`
     - On mount: fetch requests, aggregate metrics, and comparison metrics
-    - On new submission: if HTTP 202 → set `isPartiallyUnavailable=true`, display degraded message; if HTTP 200 → set `lastSubmission` with complexity, model name, response text
+    - On new submission: if HTTP 202 → set `isPartiallyUnavailable=true`, display degraded message; if HTTP 200 → set `lastSubmission` with complexity, model name, response text; if HTTP 200 with `status` `partial` and `evaluation` null → still show the response text and model name plus the notice "Response generated. Quality evaluation was unavailable for this request." (never the 202 message, never `pending`)
     - On `selectedId` change: fetch full detail via `getRequestDetail(selectedId)` and store in `detail`
     - After each submission: re-fetch `getRequests()`, `getAggregateMetrics()`, `getComparisonMetrics()`
     - Render all sub-components with correct props; on any API error set `error` state for `ErrorBanner`
@@ -544,9 +583,9 @@ Work follows a strict dependency order: DB models → services → routers → t
 
   - [ ] 11.5 Deployment preparation and documentation
     - Create `backend/requirements.txt` install instructions in `README.md` (if not already present): `cd backend && python -m venv .venv && .venv\Scripts\Activate.ps1 && pip install -r requirements.txt`
-    - Document all required `backend/.env` variables: `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `OPENAI_API_KEY`, `OLLAMA_BASE_URL`, `ROUTING_POLICY`, `BASELINE_MODEL_ID` (optional), `FALLBACK_MODEL_ID` (optional), `ESCALATION_CONFIDENCE_THRESHOLD`
+    - Document all required `backend/.env` variables: `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `GEMINI_API_KEY`, `OLLAMA_BASE_URL`, `ROUTING_POLICY`, `BASELINE_MODEL_ID` (optional), `FALLBACK_MODEL_ID` (optional), `ESCALATION_CONFIDENCE_THRESHOLD`
     - Document `frontend/.env.local` required variable: `VITE_API_URL`
-    - Verify `python backend/testing/create_tables.py` creates all six tables cleanly on a fresh `neuroroute` database
+    - Verify `python -m testing.create_tables` (run from `backend/`) creates all six tables cleanly on a fresh `neuroroute` database, and that `python -m testing.migrate_requests_table` then reports nothing left to apply
     - _Requirements: 1.6, 4.4, 4.5, 5.3_
 
   - [ ] 11.6 Final Checkpoint — full end-to-end demo run
@@ -565,10 +604,11 @@ Work follows a strict dependency order: DB models → services → routers → t
 
 - Tasks marked with `*` are optional and can be skipped for a faster MVP, but property tests should be run at least once before the final checkpoint
 - Each task references specific requirements for traceability
-- The existing `POST /api/requests/`, `GET /api/requests/`, and `GET /api/health` endpoints must not be modified until Task 9.2
+- The existing `POST /api/requests/`, `GET /api/requests/`, and `GET /api/health` endpoints must not be modified until Task 9.1a (prompt validation only) and Task 9.2
+- The existing `requests` table is upgraded only by the controlled migration in Task 1.4a (`ALTER TABLE ... ADD COLUMN`); it is never dropped or recreated and existing rows are preserved
 - `capability_tier` integer mapping: 1 = LOW (simple queries), 2 = MEDIUM (moderate queries), 3 = HIGH (complex queries)
 - Use in-memory SQLite for unit and property tests; use the real MySQL `neuroroute` database only for integration tests (Tasks 11.1 and 11.2)
-- OpenAI calls incur real per-token costs — use Ollama locally during development and register it with `capability_tier=2` to handle most test prompts without cost
+- Gemini API calls are free within the free tier's rate limits and billed per token beyond it — use Ollama locally during development and register it with `capability_tier=2` to handle most test prompts without cost
 - `ESCALATION_CONFIDENCE_THRESHOLD` is validated at application startup (module import time in `evaluator.py`), not per-request
 - `response_text` must use `Text(4294967295)` (LONGTEXT) to support responses up to 1,000,000 characters
 - All Hypothesis property tests are tagged with their property number and the requirements clause they validate
@@ -580,7 +620,7 @@ Work follows a strict dependency order: DB models → services → routers → t
   "waves": [
     { "id": 0, "tasks": ["1.1", "1.2"] },
     { "id": 1, "tasks": ["1.3"] },
-    { "id": 2, "tasks": ["1.4"] },
+    { "id": 2, "tasks": ["1.4", "1.4a"] },
     { "id": 3, "tasks": ["1.5", "1.6"] },
     { "id": 4, "tasks": ["2.1", "3.1", "4.1"] },
     { "id": 5, "tasks": ["2.2", "3.2", "3.3", "4.2", "5.3"] },
@@ -593,7 +633,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     { "id": 12, "tasks": ["7.4", "8.2"] },
     { "id": 13, "tasks": ["7.5", "8.1"] },
     { "id": 14, "tasks": ["8.3"] },
-    { "id": 15, "tasks": ["8.4"] },
+    { "id": 15, "tasks": ["8.4", "9.1a"] },
     { "id": 16, "tasks": ["8.5", "9.1"] },
     { "id": 17, "tasks": ["9.2"] },
     { "id": 18, "tasks": ["9.3"] },

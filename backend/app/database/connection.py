@@ -33,3 +33,6 @@ SessionLocal = sessionmaker(
 # Base class for database models
 class Base(DeclarativeBase):
     pass
+# print ("Database connection established successfully.",database_url)
+# print('engine:', engine)
+# print('SessionLocal:', SessionLocal)

@@ -10,11 +10,16 @@ Router/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py             ← FastAPI app factory
+│   │   ├── exceptions.py       ← Shared application exception types
 │   │   ├── database/           ← DB engine, sessions, dependency injection
 │   │   ├── models/             ← SQLAlchemy ORM models
 │   │   ├── routers/            ← FastAPI route handlers
 │   │   └── schemas/            ← Pydantic request/response schemas
+│   ├── tests/                  ← pytest suite (in-memory SQLite, live DB blocked)
 │   ├── testing/                ← Standalone setup and verification scripts
+│   ├── pytest.ini              ← pytest configuration
+│   ├── requirements.txt        ← Pinned backend dependencies
+│   ├── .env.example            ← Template for backend/.env
 │   └── .env                    ← Local secrets (never committed)
 │
 ├── frontend/
@@ -61,7 +66,7 @@ Contains SQLAlchemy ORM model classes. Each file maps to a logical domain entity
 
 - Models inherit from `Base` (imported from `connection.py`).
 - Use SQLAlchemy 2.x style: `Mapped[type]` + `mapped_column()`.
-- **Currently exists:** `request.py` — defines the `requests` table.
+- **Currently exists:** `request.py`, `model.py`, `routing_decision.py`, `execution.py`, `evaluation.py`, `feedback.py` — the six tables `requests`, `models`, `routing_decisions`, `executions`, `evaluations`, `feedback`. All are re-exported from `models/__init__.py`.
 
 ### `backend/app/routers/`
 Contains `APIRouter` instances grouped by domain. Each router file defines its own `prefix` and `tags`.
@@ -78,13 +83,22 @@ Contains Pydantic v2 schema classes for request validation and response serialis
 - **Currently exists:** `requests.py` — `RequestCreate` and `RequestResponse`.
 
 ### `backend/testing/`
-Standalone Python scripts for development and setup verification. These are **not** pytest tests — they are run directly with `python testing/<script>.py` from the `backend/` directory.
+Standalone Python scripts for development and setup verification. These are **not** pytest tests — they run against the live MySQL database. Run them from the `backend/` directory as modules: `python -m testing.<script>`. Running `python testing/<script>.py` fails with `ModuleNotFoundError: app`. The scripts are tracked in Git.
 
 | File | Purpose |
 |---|---|
 | `create_tables.py` | Runs `Base.metadata.create_all()` to create all ORM-defined tables in MySQL. |
 | `test_db.py` | Verifies raw database connectivity; prints MySQL version and database name. |
-| `test_crud.py` | Manually exercises CREATE and READ operations against the `requests` table. |
+| `test_crud.py` | Manually exercises CREATE and READ operations against the `requests` table. **Warning:** it INSERTS a row into the live table on every run. |
+| `migrate_requests_table.py` | Additive migration that adds the new columns to the live `requests` table (dry run by default). Documented in `MIGRATION.md`. |
+| `MIGRATION.md` | Usage and safety notes for the migration script. |
+
+### `backend/tests/`
+The pytest suite. Run it with `cd backend; pytest`, or `pytest backend/tests -q` from the repo root (configuration in `backend/pytest.ini`).
+
+- Tests use in-memory SQLite (fixtures `engine`, `db_session`, `test_client` in `conftest.py`). Foreign keys are enforced.
+- An autouse guard in `conftest.py` makes the live MySQL `SessionLocal` and `engine.connect()/begin()` raise `RuntimeError`, so tests can never touch the real `neuroroute` data.
+- Sub-folders: `test_database/` (ORM models), `test_migration/`, `test_models/`, `test_intelligence/`, `test_routing/`, `test_adapters/`, `test_evaluation/`, `test_feedback/`, `test_pipeline/` (API and end-to-end flow). `test_guard.py` verifies the guard itself.
 
 ---
 
@@ -179,7 +193,7 @@ backend/app/routing/
 backend/app/models_adapters/     (or backend/app/adapters/)
 ├── __init__.py
 ├── base.py             ← Abstract base class for all model clients
-├── openai_adapter.py   ← OpenAI / GPT-4o client
+├── gemini_adapter.py   ← Google Gemini client
 └── ollama_adapter.py   ← Local model client (Llama, etc.)
 ```
 

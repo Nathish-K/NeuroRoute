@@ -26,4 +26,6 @@ dist/
 .DS_Store
 Thumbs.db
 
-testing/
+# Local database dumps and backups (never commit data)
+backups/
+*.dump

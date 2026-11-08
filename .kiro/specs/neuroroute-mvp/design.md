@@ -4,7 +4,7 @@
 
 NeuroRoute MVP extends the existing React 19 + FastAPI + MySQL application with six new backend subsystems that form an adaptive AI inference pipeline. A single `POST /api/requests/` call now orchestrates the full chain: the Intelligence Service classifies the prompt's complexity, the Routing Engine selects the optimal LLM based on configurable policy, the Execution Engine dispatches the prompt and captures metrics, and the Evaluation Service scores the response and triggers escalation when confidence is low. A Feedback Service collects user ratings, and an Observability Dashboard surfaces routing decisions, execution metrics, and quality scores to the frontend.
 
-All new subsystems are implemented as plain Python modules in `backend/app/`, following the existing SQLAlchemy 2.x / Pydantic v2 / FastAPI conventions. No new databases, caches, or message queues are introduced. External model calls (OpenAI) incur real per-token costs; Ollama is free for local use.
+All new subsystems are implemented as plain Python modules in `backend/app/`, following the existing SQLAlchemy 2.x / Pydantic v2 / FastAPI conventions. No new databases, caches, or message queues are introduced. External model calls to the Google Gemini API are free within the free tier's limits and billed per token beyond it; Ollama is free for local use.
 
 ---
 
@@ -23,7 +23,7 @@ graph TD
     EVAL["Evaluation Service\napp/evaluation/"]
     FB["Feedback Service\napp/feedback/"]
     REG["Model Registry\napp/models/model.py"]
-    OAI["OpenAI API\n(external, paid)"]
+    GEM["Google Gemini API\n(external, free tier + paid)"]
     OLL["Ollama\n(local, free)"]
     DB["MySQL: neuroroute"]
 
@@ -33,7 +33,7 @@ graph TD
     INT --> ROUTE
     ROUTE --> REG
     ROUTE --> EXEC
-    EXEC --> OAI
+    EXEC --> GEM
     EXEC --> OLL
     EXEC --> EVAL
     EVAL --> ROUTE
@@ -88,8 +88,10 @@ POST /api/requests/
 
 ### Degraded Modes
 
-- **Intelligence or Routing unavailable**: Request persisted with `status="pending"`, HTTP 202 returned. No Execution or Evaluation occurs.
-- **Execution or Evaluation unavailable after successful routing**: Partial response returned; the failed step's error description is included in the response body.
+- **Routing Engine unavailable**: Request persisted with `status="pending"`, HTTP 202 returned. No Execution or Evaluation occurs.
+- **Intelligence Service unavailable (alone)**: The pipeline continues with the fallback `complexity_class="moderate"` (MEDIUM); an `intelligence` entry is added to `step_errors`; HTTP 200 with `status="partial"`. HTTP 202 is NOT returned.
+- **Execution failure (provider error or timeout)**: Execution_Record stored as `failed` or `timed_out`; the error is added to `step_errors`; the pipeline continues.
+- **Evaluation Service fails after a completed execution**: The Execution_Record and its response text are preserved; `evaluation` is null; an `evaluation` entry is added to `step_errors`; request status is `partial`; HTTP 200 is returned (never 202, never `pending`).
 - **Baseline_Router mode**: `BASELINE_MODEL_ID` env var overrides policy selection; deterministic model choice.
 
 ---
@@ -111,25 +113,51 @@ def count_tokens(text: str) -> int:
 **`classifier.py`** — Classification logic
 
 ```python
-from app.intelligence.complexity import count_tokens
+from typing import Literal
 
+from app.intelligence.complexity import count_tokens, tokenise
+
+# Stored and returned labels. Tier mapping: simple = LOW (1), moderate = MEDIUM (2), complex = HIGH (3).
 ComplexityClass = Literal["simple", "moderate", "complex"]
 
 class ClassificationResult(BaseModel):
     complexity_class: ComplexityClass
-    explanation: str  # 10–300 characters
+    explanation: str  # 10-300 characters
 
 def classify_prompt(prompt: str) -> ClassificationResult:
     """
-    Apply rule-based classification:
-    - simple:   < 50 tokens AND no domain-specific terminology
-    - moderate: 2+ reasoning steps OR domain-specific terms
-    - complex:  2+ independent sources OR specialised knowledge OR 3+ reasoning steps
-    Raises ValueError if prompt is empty.
+    Deterministic, rule-based classification (no model call, no randomness, no I/O).
+
+    Measures (case-insensitive, matched against fixed term lists):
+      N = token count
+      D = number of distinct DOMAIN_KEYWORDS found
+      R = number of distinct REASONING_CONNECTIVES found
+      S = number of distinct SYNTHESIS_INDICATORS found
+
+    Rules, evaluated in this order (first match wins):
+      1. HIGH   / "complex":  R >= 3  OR  S >= 2  OR  D >= 3  OR  N >= 200
+      2. LOW    / "simple":   N < 50  AND  D == 0  AND  R < 2  AND  S == 0
+      3. MEDIUM / "moderate": every other prompt (fallback for unclassified prompts)
+
+    Raises ValueError if the prompt is empty/whitespace-only or has more than 1000 tokens.
     """
 ```
 
-Domain detection uses a curated keyword list covering medical, legal, financial, scientific, and engineering terminology. Reasoning-step detection counts connective phrases (e.g. "first", "then", "therefore", "because", "however", "additionally", "finally").
+**Classification policy** (identical to Requirements 2.3-2.5 and Task 4.2). The three conditions are mutually exclusive and exhaustive: the LOW and HIGH conditions can never both hold, and MEDIUM is the explicit fallback for everything else, including any prompt of 50 to 199 tokens that matches no indicator. When the Intelligence Service itself fails, the pipeline also falls back to MEDIUM (`moderate`).
+
+| Class (tier) | Condition |
+|---|---|
+| `complex` (HIGH) | R >= 3, or S >= 2, or D >= 3, or N >= 200 |
+| `simple` (LOW) | N < 50 and D = 0 and R < 2 and S = 0 |
+| `moderate` (MEDIUM) | anything else (fallback) |
+
+Fixed term lists (single words, or multi-word phrases matched as consecutive tokens; matching is case-insensitive and each distinct entry counts once):
+
+- `DOMAIN_KEYWORDS` - at least 30 terms covering medical, legal, financial, scientific, and engineering vocabulary.
+- `REASONING_CONNECTIVES` - first, then, therefore, because, however, additionally, finally, consequently, furthermore, although, whereas.
+- `SYNTHESIS_INDICATORS` - compare, contrast, versus, synthesize, synthesise, critique, evaluate, literature, sources, research, tradeoffs.
+
+The explanation follows a fixed template, for example: `Classified as moderate (MEDIUM): fallback rule; tokens=62, domain_terms=0, reasoning_steps=1, synthesis_indicators=0.` (10-300 characters). The classifier also enforces the 1000-token maximum. Because the API accepts at most 1000 characters (Requirement 8.7), that token guard is a defence-in-depth check that normal API traffic cannot reach.
 
 > **Out of scope for MVP**: `router.py` (a FastAPI sub-router at `prefix="/api/intelligence"`) is not implemented in the MVP. The Intelligence Service is called directly by the pipeline orchestrator. No requirement or task depends on this endpoint.
 
@@ -243,15 +271,34 @@ class ProviderAdapter(ABC):
         """Dispatch prompt to provider. Must never raise unhandled exceptions."""
 ```
 
-**`openai_adapter.py`**
+**`gemini_adapter.py`**
 
 ```python
-class OpenAIAdapter(ProviderAdapter):
+class GeminiAdapter(ProviderAdapter):
     """
-    Reads OPENAI_API_KEY from environment.
+    Calls the Google Gemini API (generateContent) with httpx; no provider SDK is used.
+    Reads GEMINI_API_KEY from environment.
     Raises ConfigurationError if key is absent or empty.
+    Sends the key ONLY in the `x-goog-api-key` request header, never as a `?key=` query
+    parameter, because httpx errors and logs include the request URL.
     Enforces 30-second timeout per request.
-    Never includes the API key in logs, errors, or responses.
+    Never includes the API key in logs, errors, responses, or URLs.
+
+    Request:  POST https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent
+              body {"contents": [{"parts": [{"text": prompt}]}]}
+    Response mapping:
+      response_text      = text of all parts of candidates[0].content (truncated to 1,000,000 chars)
+      input_token_count  = usageMetadata.promptTokenCount
+      output_token_count = usageMetadata.candidatesTokenCount + usageMetadata.thoughtsTokenCount
+                           (a missing field counts as 0; thinking tokens are billed as output)
+    Failure mapping:
+      non-2xx (including HTTP 429 rate limit / quota)          -> status "failed"
+      blocked prompt (promptFeedback.blockReason, no candidates) -> status "failed", plain-language message
+      httpx.TimeoutException                                    -> status "timed_out"
+
+    The usageMetadata field names were checked against Google's generateContent reference.
+    Confirm the endpoint path, request body, and pricing treatment of thinking tokens against
+    the current Google documentation when implementing.
     """
     async def dispatch(self, prompt: str, model_name: str) -> ExecutionResult: ...
 ```
@@ -398,7 +445,7 @@ def get_request_detail(request_id: int, db: Session = Depends(get_db)): ...
 
 ### Existing Table: `requests` (modified)
 
-Two new nullable columns are added to preserve backward compatibility with existing records.
+Three columns are added to the existing table without touching existing rows: two nullable columns and `created_at` with a server default. `create_all()` cannot alter an existing table, so the live table is upgraded by the controlled migration described below.
 
 ```python
 class Request(Base):
@@ -408,11 +455,11 @@ class Request(Base):
     prompt: Mapped[str] = mapped_column(String(1000), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")
 
-    # NEW nullable columns
+    # NEW columns (added to the live table by the migration script described below)
     complexity_class: Mapped[str | None] = mapped_column(String(20), nullable=True)
     end_to_end_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), nullable=False
+        DateTime, server_default=func.now(), nullable=False
     )
 
     # Relationships
@@ -423,6 +470,25 @@ class Request(Base):
         back_populates="request", uselist=False
     )
 ```
+
+#### Migration of the existing `requests` table
+
+`Base.metadata.create_all()` creates the five new tables but never alters a table that already exists, so the three new `requests` columns are added to the live table by a controlled `ALTER TABLE` migration. The `requests` table is never dropped or recreated, and every existing row is preserved.
+
+- **Script**: `backend/testing/migrate_requests_table.py`, run from `backend/` with `python -m testing.migrate_requests_table` (dry run, the default) and `python -m testing.migrate_requests_table --apply`.
+- **Statements** (static text executed through `text()`; no user input is interpolated):
+
+```sql
+ALTER TABLE requests ADD COLUMN complexity_class VARCHAR(20) NULL;
+ALTER TABLE requests ADD COLUMN end_to_end_latency_ms INT NULL;
+ALTER TABLE requests ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
+```
+
+- **Defaults for existing rows**: `complexity_class` and `end_to_end_latency_ms` are NULL; `created_at` is set by the server default to the time of the migration. All legacy rows therefore share one timestamp, so every list query orders by `created_at DESC, id DESC` to keep the previous newest-first behaviour.
+- **Idempotent and additive**: a column that already exists is skipped (re-running, or running against a database built by `create_all()`, executes nothing). The script never issues `DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, or `CREATE TABLE` against `requests`.
+- **Safety checks**: dry run by default; `--apply` is required to execute. Before applying, the script records the row count and a checksum of `(id, prompt, status)`; afterwards it asserts both are unchanged and exits non-zero on any mismatch. A `mysqldump` backup of `requests` is taken first and must not be committed.
+- **Rehearsal**: run once against a scratch copy of the table (optional `--table` argument, validated against `^[A-Za-z_][A-Za-z0-9_]{0,63}$`) before applying to the live table.
+- **ORM alignment**: the `Request` model declares `created_at` with `server_default=func.now()` so a database built from scratch matches the migrated one.
 
 ### New Table: `models`
 
@@ -642,7 +708,7 @@ FastAPI's default 422 validation error format is preserved for Pydantic validati
 
 ### `POST /api/requests/` — Modified
 
-Runs the full pipeline. Returns enriched response on success or a degraded 202 on partial unavailability.
+Runs the full pipeline. Returns the enriched response on success, HTTP 200 with `status: "partial"` when a non-fatal step fails, or a degraded HTTP 202 only when the Routing Engine is unavailable.
 
 **Request body:**
 ```json
@@ -657,7 +723,7 @@ Runs the full pipeline. Returns enriched response on success or a degraded 202 o
   "status": "completed",
   "complexity_class": "moderate",
   "routing": {
-    "model_id": "gpt-4o-mini",
+    "model_id": "gemini-flash",
     "policy": "cost_optimised",
     "explanation": "string (≤500 chars)",
     "estimated_cost": "0.0000123456"
@@ -681,7 +747,7 @@ Runs the full pipeline. Returns enriched response on success or a degraded 202 o
 }
 ```
 
-**Degraded response — HTTP 202** (Intelligence or Routing unavailable):
+**Degraded response — HTTP 202** (Routing Engine unavailable):
 ```json
 {
   "id": 1,
@@ -691,26 +757,32 @@ Runs the full pipeline. Returns enriched response on success or a degraded 202 o
 }
 ```
 
-**Partial failure response — HTTP 200** (one step failed but pipeline continued):
+**Partial failure response — HTTP 200** (a non-fatal step failed but the pipeline continued; the execution and its response text are preserved):
 ```json
 {
   "id": 1,
   "status": "partial",
+  "complexity_class": "moderate",
+  "routing": { ... },
+  "execution": { "response_text": "string", "status": "completed", ... },
+  "evaluation": null,
   "step_errors": [
     { "step": "evaluation", "detail": "Evaluator unavailable" }
   ],
-  ...
+  "end_to_end_latency_ms": 1520
 }
 ```
 
+An Intelligence-only failure also returns HTTP 200 with `status: "partial"`, `complexity_class: "moderate"` (fallback), and a `{ "step": "intelligence", ... }` entry in `step_errors`. HTTP 202 is returned only when the Routing Engine is unavailable.
+
 **Error responses:**
-- HTTP 422: invalid prompt (empty, too long, missing field)
+- HTTP 422: invalid prompt — missing, empty, whitespace-only, or longer than 1000 characters; nothing is persisted (Requirement 8.7)
 
 ---
 
 ### `GET /api/requests/` — Modified
 
-Returns the 50 most recent requests (by `created_at` desc), enriched with complexity and model info.
+Returns the 50 most recent requests (ordered by `created_at` desc, then `id` desc, so legacy rows that share the migration timestamp keep newest-first order), enriched with complexity and model info. Rows created before the migration have null `complexity_class`, model, and quality fields.
 
 **Response — HTTP 200:**
 ```json
@@ -720,7 +792,7 @@ Returns the 50 most recent requests (by `created_at` desc), enriched with comple
     "prompt": "string (truncated to 100 chars on frontend, full here)",
     "status": "completed",
     "complexity_class": "moderate",
-    "selected_model_name": "gpt-4o-mini",
+    "selected_model_name": "gemini-flash",
     "routing_policy": "cost_optimised",
     "latency_ms": 1340,
     "estimated_cost": "0.0000123456",
@@ -776,7 +848,7 @@ Returns full detail for a single request including all linked records. Any recor
 **Response — HTTP 201:** Full model record including `id` and `created_at`.
 
 **Error responses:**
-- HTTP 409: `{"detail": "Model with identifier 'gpt-4o-mini' already exists", "field": "identifier"}`
+- HTTP 409: `{"detail": "Model with identifier 'gemini-flash' already exists", "field": "identifier"}`
 - HTTP 422: missing or invalid fields
 
 ---
@@ -868,22 +940,22 @@ backend/app/schemas/
 ### Step-by-Step Sequence for `POST /api/requests/`
 
 ```
-1. VALIDATE prompt (Pydantic: min_length=1, max_length=1000)
-   → HTTP 422 on failure
+1. VALIDATE prompt (Pydantic: min_length=1, max_length=1000 characters; whitespace-only prompts rejected)
+   → HTTP 422 on failure; nothing is persisted and no pipeline step runs
 
 2. PERSIST Request with status="pending"
    → HTTP 500 on DB failure (unrecoverable at this stage)
 
 3. CLASSIFY prompt via Intelligence Service
    → On success: complexity_class set in memory
-   → On ServiceUnavailableError: return HTTP 202 (degraded mode)
-   → On ValueError (empty prompt): HTTP 422 (already caught by Pydantic)
+   → On ServiceUnavailableError (or any Intelligence failure other than an invalid prompt): use complexity_class="moderate" (MEDIUM fallback), append {"step": "intelligence", ...} to step_errors, continue. Never HTTP 202
+   → On ValueError (empty or over-length prompt): HTTP 422 (normally already caught by Pydantic)
 
 4. ROUTE via Routing Engine
    → On success: routing_decision persisted
-   → On NoEligibleModelError: HTTP 503
+   → On NoEligibleModelError: HTTP 503 (caught BEFORE ServiceUnavailableError, which is its base class)
    → On PersistenceError: HTTP 500
-   → On ServiceUnavailableError: return HTTP 202 (degraded mode)
+   → On ServiceUnavailableError (Routing Engine unavailable): request stays "pending", return HTTP 202 (degraded mode)
 
 5. EXECUTE via Execution Engine
    → On success: execution_record with status="completed"
@@ -896,7 +968,7 @@ backend/app/schemas/
    → On success: evaluation_record persisted
    → If escalation_flag=True and higher tier available: steps 4-6 repeated once
    → If escalation_flag=True and no higher tier: flag set to False, original response returned
-   → On ServiceUnavailableError: step_errors appended, evaluation=null in response
+   → On any Evaluation Service failure after a completed execution: step_errors appended ({"step": "evaluation", ...}), evaluation=null, the Execution_Record and its response text are preserved, request status becomes "partial", HTTP 200 is returned (never 202, never "pending")
 
 7. UPDATE Request
    → status = "completed" (or "partial" if step_errors non-empty)
@@ -908,11 +980,13 @@ backend/app/schemas/
 
 ### HTTP 202 Degraded Mode Trigger Conditions
 
-HTTP 202 is returned when either the Intelligence Service **or** the Routing Engine raises a `ServiceUnavailableError`. In this case:
+HTTP 202 is returned only when the Routing Engine raises a `ServiceUnavailableError`. In this case:
 - The request is persisted with `status="pending"`.
 - No Routing_Decision, Execution_Record, or Evaluation_Record is created.
 - The frontend displays the partial-unavailability message.
-- If **only** the Intelligence Service is unavailable but Routing remains available, the pipeline proceeds with a fallback complexity class of `moderate` and does **not** return 202.
+- `NoEligibleModelError` is a subclass of `ServiceUnavailableError` but maps to HTTP 503 (Requirement 3.6), so the orchestrator catches it first; it is not a 202 trigger.
+- If **only** the Intelligence Service fails, the pipeline proceeds with the fallback complexity class `moderate` and does **not** return 202.
+- If the Evaluation Service fails after a completed execution, the generated response is preserved and HTTP 200 with `status="partial"` is returned; the request is **not** marked `pending` and 202 is **not** returned.
 
 ---
 
@@ -1010,7 +1084,7 @@ HTTP 202 is returned when either the Intelligence Service **or** the Routing Eng
 
 ### Property 12: No API Key Exposure
 
-*For any* error condition (provider error, timeout, missing configuration), the Execution Engine SHALL not include any substring of the `OPENAI_API_KEY` value in logs, error messages, or API responses.
+*For any* error condition (provider error, timeout, missing configuration), the Execution Engine SHALL not include any substring of the `GEMINI_API_KEY` value in logs, error messages, API responses, or outbound request URLs (the key is sent only in the `x-goog-api-key` header).
 
 **Validates: Requirements 4.10**
 
@@ -1119,7 +1193,7 @@ FastAPI exception handlers are registered in `main.py` to map each custom except
 |---|---|---|---|
 | Prompt validation | Invalid input | 422 | No |
 | DB persist (request) | DB error | 500 | No |
-| Intelligence Service | Unavailable | 202 | No (degraded) |
+| Intelligence Service | Unavailable | 200 (step_errors, fallback `moderate`) | Yes |
 | Intelligence Service | Prompt too long | 422 | No |
 | Routing Engine | Unavailable | 202 | No (degraded) |
 | Routing Engine | No eligible model | 503 | No |
@@ -1127,7 +1201,7 @@ FastAPI exception handlers are registered in `main.py` to map each custom except
 | Execution Engine | Provider error | 200 (step_errors) | Yes |
 | Execution Engine | Timeout | 200 (step_errors) | Yes |
 | Execution Engine | Missing config | 500 | No |
-| Evaluation Service | Unavailable | 200 (step_errors) | Yes |
+| Evaluation Service | Unavailable / failure after execution | 200 `partial` (step_errors; execution and response preserved) | Yes |
 
 ---
 
@@ -1162,7 +1236,7 @@ def test_cost_optimised_selects_minimum(models):
 |---|---|
 | `model_strategy()` | Random `ModelRecord` with valid identifier, costs ≥ 0, context length > 0, random enabled flag |
 | `prompt_strategy()` | Random non-empty strings up to 1000 tokens |
-| `short_prompt_strategy()` | Strings of <50 whitespace-delimited tokens, no domain keywords |
+| `short_prompt_strategy()` | Strings of <50 whitespace-delimited tokens containing no domain keyword, reasoning connective, or synthesis indicator (always classified `simple`) |
 | `complexity_class_strategy()` | Random draw from `{"simple", "moderate", "complex"}` |
 | `rating_strategy()` | Random integer in [1, 5] |
 | `invalid_rating_strategy()` | Random integer outside [1, 5] |
@@ -1183,7 +1257,7 @@ backend/tests/
 │   └── test_router.py           ← Property 7
 ├── test_adapters/
 │   ├── test_base.py             ← Property 11
-│   ├── test_openai_adapter.py   ← Properties 9, 10, 12
+│   ├── test_gemini_adapter.py   ← Properties 9, 10, 12
 │   └── test_ollama_adapter.py   ← Properties 9, 10
 ├── test_evaluation/
 │   └── test_evaluator.py        ← Properties 13, 14
@@ -1197,11 +1271,15 @@ backend/tests/
 
 ### Unit Tests Focus
 
-- Specific classification examples for `moderate` and `complex` prompts (requirements 2.4, 2.5)
+- Classification boundary cases for the LOW/MEDIUM/HIGH rules: N = 49/50/199/200, R = 1/2/3, D = 0/1/3, S = 0/1/2, and the MEDIUM fallback (requirements 2.3-2.5)
 - Escalation chain scenarios (requirements 5.5, 5.6, 5.7)
-- HTTP 202 degraded mode trigger conditions (requirement 8.4)
+- HTTP 202 only when the Routing Engine is unavailable (requirement 8.4)
+- Evaluation failure after a completed execution returns HTTP 200 `partial` with the execution and response preserved, never 202 or `pending` (requirement 8.4)
+- Intelligence-only failure continues with `moderate` and no 202 (requirement 8.4)
+- Prompt validation: empty, whitespace-only, 1001-character, and missing prompts return 422 and persist nothing (requirement 8.7)
 - Fallback execution producing two `Execution_Records` (requirement 4.8)
 - `GET /api/requests/{id}` returning null for missing linked records (requirement 5.8)
+- Controlled `requests` migration: statement generation, idempotence, and no destructive SQL are unit-tested; the MySQL apply is verified manually (Task 1.4a)
 
 ### Integration Tests
 
@@ -1314,12 +1392,11 @@ The following packages must be added to `backend/requirements.txt`. Versions sho
 | `pymysql==1.2.3` | Already in use |
 | `python-dotenv==1.2.4` | Already in use |
 | `pydantic==2.14.2` | Ships with FastAPI |
-| `httpx==0.28.1` | Async HTTP client for OpenAI and Ollama adapters |
-| `openai==3.45.0` | Official OpenAI Python SDK (3.x API) |
+| `httpx==0.28.1` | Async HTTP client for the Gemini and Ollama adapters (no provider SDK is used) |
 | `hypothesis==6.170.14` | Property-based testing |
 | `pytest==9.2.0` | Test runner |
 | `pytest-asyncio==1.4.1.post1` | Async test support |
 
 `requirements.txt` has been created at `backend/requirements.txt` with all packages pinned. Run `pip install -r requirements.txt` from the `backend/` directory (with `.venv` activated) to install any missing packages into the virtual environment.
 
-> **Cost note:** OpenAI calls incur real per-token charges billed to the key in `OPENAI_API_KEY`. During development, use Ollama (local, free) to avoid costs. Register both providers in the Model Registry and set `ROUTING_POLICY=cost_optimised` to prefer Ollama when available.
+> **Cost note:** The Gemini API has a free tier (no per-token charge, limited model access, lower rate limits) and a paid tier billed per token. Google may use free-tier content to improve its products, so do not send sensitive prompts on the free tier. HTTP 429 (rate limit) responses are handled as failed executions and can trigger the fallback model. Ollama is free and local. Register both providers in the Model Registry; per-token prices are registry data, so copy current prices from Google's pricing page when registering a Gemini model (use 0 while on the free tier) and set `ROUTING_POLICY=cost_optimised` to prefer Ollama when it is cheaper.

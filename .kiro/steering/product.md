@@ -51,7 +51,7 @@ Adaptive Router         ← Planned: model selection based on cost / latency / q
   │
   ├──────────────────┐
   ▼                  ▼
-Model A            Model B  ← Planned: LLM client adapters (e.g. GPT-4o, Llama 3)
+Model A            Model B  ← Planned: LLM client adapters (e.g. Gemini, Llama 3)
   │                  │
   └────────┬─────────┘
            ▼
