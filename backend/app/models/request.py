@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, String, Integer, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
+from backend.app.models.feedback import Feedback
 
 
 class Request(Base):

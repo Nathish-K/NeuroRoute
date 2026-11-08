@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from fastapi import Request
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
