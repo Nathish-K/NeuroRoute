@@ -164,7 +164,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Preserve the common `ExecutionResult` fields: response text, input/output token counts, latency, estimated cost, status, and error message
     - _Requirements: 4.1, 4.2, 4.6, 4.7, 4.9, 4.10, 4.11_
 
-  - [ ] 3.5 Write tests for provider adapters
+  - [x] 3.5 Write tests for provider adapters
     - Create `backend/tests/test_adapters/test_base.py` — verify `ProviderAdapter` cannot be instantiated directly; verify `ExecutionResult` fields are accessible by name
     - Create `backend/tests/test_adapters/test_gemini_adapter.py` — use `httpx` mock (`respx` or `unittest.mock`) for all HTTP calls:
       - Missing `GEMINI_API_KEY` raises `ConfigurationError`
@@ -198,7 +198,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - **Property 11: Error Containment** — **Validates: Requirements 4.6, 4.7, 4.9**
     - **Property 12: No API Key Exposure** — **Validates: Requirements 4.10**
 
-  - [ ] 3.7 Phase 3 Checkpoint — verify adapter behaviour with missing env vars
+  - [x] 3.7 Phase 3 Checkpoint — verify adapter behaviour with missing env vars
     - In a Python shell, instantiate `GeminiAdapter()` with `GEMINI_API_KEY` unset and confirm `ConfigurationError` is raised
     - Instantiate `OllamaAdapter()` with `OLLAMA_BASE_URL` unset and confirm `ConfigurationError` is raised
     - Instantiate `GroqAdapter()` with `GROQ_API_KEY` unset and confirm `ConfigurationError` is raised
