@@ -118,14 +118,14 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 3. Phase 3: Provider Adapters
-  - [ ] 3.1 Create the abstract `ProviderAdapter` interface
+  - [x] 3.1 Create the abstract `ProviderAdapter` interface
     - Create `backend/app/adapters/__init__.py`
     - Create `backend/app/adapters/base.py` with:
       - `@dataclass ExecutionResult`: `response_text: str`, `input_token_count: int`, `output_token_count: int`, `latency_ms: int`, `estimated_cost: Decimal`, `status: str` (`"completed"` | `"failed"` | `"timed_out"`), `error_message: str | None`
       - `class ProviderAdapter(ABC)` with `@abstractmethod async def dispatch(self, prompt: str, model_name: str) -> ExecutionResult`
     - _Requirements: 4.1_
 
-  - [ ] 3.2 Create `GeminiAdapter`
+  - [x] 3.2 Create `GeminiAdapter`
     - Create `backend/app/adapters/gemini_adapter.py`
     - `GeminiAdapter(ProviderAdapter)`:
       - `__init__`: reads `GEMINI_API_KEY` from env; raises `ConfigurationError("GEMINI_API_KEY is not set")` if absent or empty; never stores the raw key in an instance variable named such that it would appear in `repr()`
@@ -141,7 +141,7 @@ Work follows a strict dependency order: DB models → services → routers → t
         - The `usageMetadata` field names were checked against the Google `generateContent` reference; confirm the endpoint path and request body against the current Google docs when implementing
     - _Requirements: 4.1, 4.2, 4.4, 4.6, 4.7, 4.9, 4.10_
 
-  - [ ] 3.3 Create `OllamaAdapter`
+  - [x] 3.3 Create `OllamaAdapter`
     - Create `backend/app/adapters/ollama_adapter.py`
     - `OllamaAdapter(ProviderAdapter)`:
       - `__init__`: reads `OLLAMA_BASE_URL` from env; raises `ConfigurationError("OLLAMA_BASE_URL is not set")` if absent or empty
@@ -153,7 +153,7 @@ Work follows a strict dependency order: DB models → services → routers → t
         - Never propagates unhandled exceptions
     - _Requirements: 4.1, 4.2, 4.5, 4.6, 4.7, 4.9_
 
-  - [ ] 3.4 Create `GroqAdapter`
+  - [x] 3.4 Create `GroqAdapter`
     - Create `backend/app/adapters/groq_adapter.py`
     - Implement `GroqAdapter(ProviderAdapter)` using the existing `httpx` dependency and the verified Groq contract: `POST https://api.groq.com/openai/v1/chat/completions`, `Authorization: Bearer <GROQ_API_KEY>`, and a JSON body containing `model` and a user `messages` entry
     - Read `GROQ_API_KEY` securely from the environment and raise `ConfigurationError` when it is absent or empty; never hardcode, store in a repr-visible field, log, or expose the credential
