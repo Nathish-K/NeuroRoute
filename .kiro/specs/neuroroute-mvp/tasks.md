@@ -205,14 +205,14 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 4. Phase 4: Query Intelligence
-  - [ ] 4.1 Create the Intelligence Service tokeniser module
+  - [x] 4.1 Create the Intelligence Service tokeniser module
     - Create `backend/app/intelligence/__init__.py`
     - Create `backend/app/intelligence/complexity.py` with:
       - `tokenise(text: str) -> list[str]` — split on whitespace and punctuation using `re.split(r"[\s\W]+", text)`, filter empty strings
       - `count_tokens(text: str) -> int` — returns `len(tokenise(text))`
     - _Requirements: 2.2_
 
-  - [ ] 4.2 Create the Intelligence Service classifier module
+  - [x] 4.2 Create the Intelligence Service classifier module
     - Create `backend/app/intelligence/classifier.py`:
       - `ComplexityClass = Literal["simple", "moderate", "complex"]` (tiers: `simple` = LOW, `moderate` = MEDIUM, `complex` = HIGH; the stored and returned labels are unchanged)
       - `ClassificationResult(BaseModel)`: `complexity_class: ComplexityClass`, `explanation: str` (min_length=10, max_length=300)
@@ -231,7 +231,7 @@ Work follows a strict dependency order: DB models → services → routers → t
         - Pure and deterministic: no randomness, no I/O, no model call
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
 
-  - [ ] 4.3 Write tests for the Intelligence Service
+  - [x] 4.3 Write tests for the Intelligence Service
     - Create `backend/tests/test_intelligence/test_tokeniser.py`:
       - Empty string returns empty list
       - Punctuation-only string returns empty list
