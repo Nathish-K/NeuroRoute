@@ -10,7 +10,7 @@ Work follows a strict dependency order: DB models → services → routers → t
 
 ## Tasks
 
-- [ ] 1. Phase 1: Backend Foundation and Database Migrations
+- [x] 1. Phase 1: Backend Foundation and Database Migrations
   - [x] 1.1 Create `backend/requirements.txt` with pinned package versions
     - Create `backend/requirements.txt` with the following pinned versions:
       ```
@@ -83,21 +83,21 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Manually call `POST /api/requests/` via Swagger UI at `http://127.0.0.1:8000/docs` and confirm it still returns `{id, prompt, status}` unchanged
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 2. Phase 2: Model Registry
-  - [ ] 2.1 Create Pydantic schemas for the Model Registry
+- [x] 2. Phase 2: Model Registry
+  - [x] 2.1 Create Pydantic schemas for the Model Registry
     - Create `backend/app/schemas/models.py`
     - `ModelCreate`: `identifier` (str, max_length=128), `provider_name` (str, max_length=128), `model_name` (str, max_length=256), `max_context_length` (int, gt=0), `cost_per_input_token` (Decimal, ge=0), `cost_per_output_token` (Decimal, ge=0), `capability_tier` (int, ge=1, le=3, default=1), `enabled` (bool, default=True)
     - `ModelResponse`: all fields plus `id` (int) and `created_at` (datetime); `ConfigDict(from_attributes=True)`
     - _Requirements: 1.1, 1.5_
 
-  - [ ] 2.2 Create the Model Registry router and register it in `main.py`
+  - [x] 2.2 Create the Model Registry router and register it in `main.py`
     - Create `backend/app/routers/models.py` with `APIRouter(prefix="/api/models", tags=["Models"])`
     - `GET /` — query all `Model` records ordered by `provider_name` asc, `model_name` asc; return `list[ModelResponse]`
     - `POST /` — insert new `Model`; if `identifier` already exists raise `ConflictError` with message `"Model with identifier '{identifier}' already exists"` and `field="identifier"`; return `ModelResponse` with status 201
     - Add `from app.routers.models import router as models_router` and `app.include_router(models_router)` in `main.py` without touching any existing code
     - _Requirements: 1.2, 1.3, 1.4_
 
-  - [ ] 2.3 Write tests for the Model Registry
+  - [x] 2.3 Write tests for the Model Registry
     - Create `backend/tests/test_models/test_registry.py`
     - Unit tests: POST creates a model and returns HTTP 201 with all fields; GET returns models ordered by provider_name then model_name; duplicate identifier returns HTTP 409; missing required field returns HTTP 422; disabled model still appears in GET response
     - PBT (Hypothesis, max_examples=100):
@@ -106,18 +106,18 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 3: Disabled Models Excluded from Routing** — for any mix of enabled/disabled models queried by the routing helper, only enabled=True models are returned; **Validates: Requirements 1.7, 3.3, 3.4**
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.7_
 
-  - [ ] 2.4 Run Model Registry property tests
+  - [x] 2.4 Run Model Registry property tests
     - Execute `pytest backend/tests/test_models/ -v --tb=short`
     - **Property 1: Model Registry Round-Trip** — **Validates: Requirements 1.1, 1.3**
     - **Property 2: Model List Ordering** — **Validates: Requirements 1.2**
     - **Property 3: Disabled Models Excluded from Routing** — **Validates: Requirements 1.7**
 
-  - [ ] 2.5 Phase 2 Checkpoint — verify Model Registry endpoints
+  - [x] 2.5 Phase 2 Checkpoint — verify Model Registry endpoints
     - Use Swagger UI to POST two models with different providers and verify GET returns them in correct order
     - Verify POST with a duplicate identifier returns HTTP 409
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 3. Phase 3: Provider Adapters
+- [x] 3. Phase 3: Provider Adapters
   - [x] 3.1 Create the abstract `ProviderAdapter` interface
     - Create `backend/app/adapters/__init__.py`
     - Create `backend/app/adapters/base.py` with:
@@ -191,7 +191,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Reuse the existing adapter fixtures and shared cost, latency, error-containment, and credential-exposure properties; do not add provider-specific test infrastructure
     - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6, 4.7, 4.9, 4.10, 4.11_
 
-  - [ ]* 3.6 Run provider adapter property tests
+  - [x]* 3.6 Run provider adapter property tests
     - Execute `pytest backend/tests/test_adapters/ -v --tb=short`
     - **Property 9: Cost Calculation Invariant** — **Validates: Requirements 4.2**
     - **Property 10: Execution Latency Non-Negativity** — **Validates: Requirements 4.2**
@@ -204,7 +204,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Instantiate `GroqAdapter()` with `GROQ_API_KEY` unset and confirm `ConfigurationError` is raised
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. Phase 4: Query Intelligence
+- [x] 4. Phase 4: Query Intelligence
   - [x] 4.1 Create the Intelligence Service tokeniser module
     - Create `backend/app/intelligence/__init__.py`
     - Create `backend/app/intelligence/complexity.py` with:
@@ -248,17 +248,17 @@ Work follows a strict dependency order: DB models → services → routers → t
         - Mutual exclusivity and exhaustiveness: exactly one of the three classes is returned per call, and any prompt generated by `short_prompt_strategy()` (under 50 tokens, no listed terms) is `simple`
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8_
 
-  - [ ]* 4.4 Run Intelligence Service property tests
+  - [x]* 4.4 Run Intelligence Service property tests
     - Execute `pytest backend/tests/test_intelligence/ -v --tb=short`
     - **Property 4: Classification Returns Valid Output** — **Validates: Requirements 2.1, 2.3, 2.4, 2.5**
     - **Property 5: Classification Idempotence** — **Validates: Requirements 2.1**
 
-  - [ ] 4.5 Phase 4 Checkpoint — verify classifier produces expected outputs
+  - [x] 4.5 Phase 4 Checkpoint — verify classifier produces expected outputs
     - In a Python shell: `classify_prompt("What is 2+2?")` → `simple`; a medical diagnosis multi-step prompt → `complex`
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Phase 5: Routing Engine
-  - [ ] 5.1 Create routing strategies module
+- [x] 5. Phase 5: Routing Engine
+  - [x] 5.1 Create routing strategies module
     - Create `backend/app/routing/__init__.py`
     - Create `backend/app/routing/strategies.py`:
       - `RoutingPolicy(str, Enum)`: `COST_OPTIMISED = "cost_optimised"`, `QUALITY_OPTIMISED = "quality_optimised"`, `BASELINE = "baseline"`
@@ -267,7 +267,7 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `select_baseline(models: list[Model], baseline_model_id: str) -> Model` — find model by `identifier == baseline_model_id` and `enabled == True`; raise `NoEligibleModelError("Baseline model unavailable")` if not found or disabled
     - _Requirements: 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
-  - [ ] 5.2 Create the Routing Engine orchestrator
+  - [x] 5.2 Create the Routing Engine orchestrator
     - Create `backend/app/routing/router.py`:
       - `class RoutingResult(BaseModel)`: `model_id: str`, `model_db_id: int`, `policy: RoutingPolicy`, `explanation: str` (max 500 chars), `estimated_cost: Decimal`
       - `def route_request(request_id: int, complexity: ComplexityClass, db: Session) -> RoutingResult`:
@@ -279,12 +279,12 @@ Work follows a strict dependency order: DB models → services → routers → t
         6. Return `RoutingResult`
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9_
 
-  - [ ] 5.3 Create Pydantic schemas for routing
+  - [x] 5.3 Create Pydantic schemas for routing
     - Create `backend/app/schemas/routing.py`
     - `RoutingDecisionResponse`: `id`, `request_id`, `model_id`, `policy`, `complexity_class`, `estimated_cost`, `explanation`, `created_at`; `ConfigDict(from_attributes=True)`
     - _Requirements: 3.8_
 
-  - [ ] 5.4 Write tests for the Routing Engine
+  - [x] 5.4 Write tests for the Routing Engine
     - Create `backend/tests/test_routing/test_strategies.py`:
       - `select_cost_optimised` with single enabled model → selects it
       - `select_cost_optimised` with two models at equal cost → selects lexicographically first identifier
@@ -301,14 +301,14 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 7: Routing Decision Round-Trip** (PBT) — after `route_request`, retrieve `RoutingDecision` by request_id and confirm `model_id` matches returned result; **Validates: Requirements 3.8**
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9_
 
-  - [ ]* 5.5 Run Routing Engine property tests
+  - [x]* 5.5 Run Routing Engine property tests
     - Execute `pytest backend/tests/test_routing/ -v --tb=short`
     - **Property 3: Disabled Models Excluded from Routing** — **Validates: Requirements 1.7, 3.3, 3.4**
     - **Property 6: Cost-Optimised Selection Minimises Cost** — **Validates: Requirements 3.3**
     - **Property 7: Routing Decision Round-Trip** — **Validates: Requirements 3.8**
     - **Property 8: Baseline Router Determinism** — **Validates: Requirements 3.5**
 
-  - [ ] 5.6 Phase 5 Checkpoint — verify routing selects the correct model
+  - [x] 5.6 Phase 5 Checkpoint — verify routing selects the correct model
     - Seed two models (one cheap, one capable) via `POST /api/models/`; call `route_request()` directly in a Python shell with each policy and confirm expected model is selected
     - Ensure all tests pass, ask the user if questions arise.
 
@@ -471,7 +471,7 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `AggregateMetricsResponse`: `total_count`, `mean_latency_ms`, `mean_estimated_cost`, `mean_quality_score`, `adaptive_mean_latency_ms`, `adaptive_mean_cost`, `baseline_mean_latency_ms`, `baseline_mean_cost`
     - _Requirements: 8.2, 8.4, 7.8, 7.9_
 
-  - [x] 9.1a Add API-level prompt validation to `RequestCreate`
+  - [] 9.1a Add API-level prompt validation to `RequestCreate`
     - Modify `backend/app/schemas/requests.py`: `RequestCreate.prompt` becomes `str = Field(min_length=1, max_length=1000)` plus a validator that rejects a prompt that is empty after stripping whitespace. The stored prompt stays the original, unmodified text. The 1000 limit is in characters, matching `requests.prompt String(1000)` and `tech.md`
     - Keep `RequestResponse` unchanged; valid requests keep the exact existing request and response shape
     - This is the only change to `RequestCreate`. It must land before Task 9.2 so the pipeline never receives an invalid prompt, and a rejected request must not create a `requests` row
