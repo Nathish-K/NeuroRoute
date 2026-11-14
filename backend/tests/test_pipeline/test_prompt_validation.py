@@ -15,6 +15,7 @@ from app.database.dependencies import get_db
 from app.main import app
 from app.models.request import Request
 from app.schemas.requests import RequestCreate
+from tests.conftest import seed_stub_model, stub_provider
 
 WHITESPACE_ONLY = st.text(
     alphabet=st.characters(whitelist_categories=("Zs",))
@@ -66,24 +67,28 @@ def test_invalid_prompt_returns_422_and_persists_nothing(
     ["x" * 1000, "é" * 1000, "😀" * 1000],
     ids=["ascii-1000", "multibyte-1000", "emoji-1000"],
 )
-def test_prompt_of_1000_characters_accepted(test_client, db_session, prompt):
+def test_prompt_of_1000_characters_accepted(
+    test_client, db_session, pipeline_ready, prompt
+):
     response = test_client.post("/api/requests/", json={"prompt": prompt})
     assert response.status_code == 200
     assert response.json()["prompt"] == prompt
     assert _row_count(db_session) == 1
 
 
-def test_normal_prompt_shape_and_original_text_preserved(test_client, db_session):
+def test_normal_prompt_shape_and_original_text_preserved(
+    test_client, db_session, pipeline_ready
+):
     response = test_client.post("/api/requests/", json={"prompt": "  hello  "})
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"id", "prompt", "status"}
-    assert body["status"] == "pending"
+    # The prompt is stored and returned exactly as submitted, untrimmed.
+    assert {"id", "prompt", "status"} <= set(body)
     assert body["prompt"] == "  hello  "
     assert db_session.get(Request, body["id"]).prompt == "  hello  "
 
 
-def test_surrounding_whitespace_with_content_accepted(test_client):
+def test_surrounding_whitespace_with_content_accepted(test_client, pipeline_ready):
     response = test_client.post("/api/requests/", json={"prompt": "\n a \t"})
     assert response.status_code == 200
     assert response.json()["prompt"] == "\n a \t"
@@ -133,6 +138,8 @@ def http_client() -> Iterator[tuple[TestClient, sessionmaker]]:
 
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with factory() as session:
+        seed_stub_model(session)
 
     def _override() -> Iterator[Session]:
         session = factory()
@@ -143,7 +150,10 @@ def http_client() -> Iterator[tuple[TestClient, sessionmaker]]:
 
     app.dependency_overrides[get_db] = _override
     try:
-        yield TestClient(app), factory
+        # The accepted half of the property runs the whole pipeline, so the
+        # provider is stubbed for the lifetime of the module.
+        with stub_provider():
+            yield TestClient(app), factory
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

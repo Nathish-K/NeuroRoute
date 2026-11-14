@@ -14,13 +14,15 @@ from app.exceptions import (
 )
 from app.routers.requests import router as requests_router
 from app.routers.models import router as models_router
+from app.routers.feedback import router as feedback_router
 
 app = FastAPI()
 app.include_router(requests_router)
 app.include_router(models_router)
+app.include_router(feedback_router)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

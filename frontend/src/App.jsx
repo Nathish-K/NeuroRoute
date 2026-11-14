@@ -1,71 +1,213 @@
 import { useEffect, useState } from "react";
-import { createRequest, getRequests } from "./services/api";
+
+import ComparisonPanel from "./components/ComparisonPanel";
+import ErrorBanner from "./components/ErrorBanner";
+import MetricsSummary from "./components/MetricsSummary";
+import PromptForm from "./components/PromptForm";
+import RequestDetail from "./components/RequestDetail";
+import RequestList from "./components/RequestList";
+import {
+  createRequest,
+  getAggregateMetrics,
+  getComparisonMetrics,
+  getRequestDetail,
+  getRequests,
+} from "./services/api";
+
+const UNKNOWN_ERROR = {
+  status: "UNKNOWN",
+  message: "An unexpected error occurred",
+};
+
+function normalizeError(error) {
+  if (!error || typeof error !== "object") {
+    return UNKNOWN_ERROR;
+  }
+
+  return {
+    status: error.status ?? UNKNOWN_ERROR.status,
+    message: error.message || UNKNOWN_ERROR.message,
+  };
+}
+
+async function fetchDashboardData() {
+  const [requestsResult, metricsResult, comparisonResult] =
+    await Promise.allSettled([
+      getRequests(),
+      getAggregateMetrics(),
+      getComparisonMetrics(),
+    ]);
+
+  return { requestsResult, metricsResult, comparisonResult };
+}
+
+function firstDashboardError(snapshot) {
+  return [
+    snapshot.requestsResult,
+    snapshot.metricsResult,
+    snapshot.comparisonResult,
+  ].find((result) => result.status === "rejected")?.reason;
+}
 
 function App() {
-  const [prompt, setPrompt] = useState("");
   const [requests, setRequests] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [metrics, setMetrics] = useState(null);
+  const [comparison, setComparison] = useState(null);
+  const [lastSubmission, setLastSubmission] = useState(null);
+  const [error, setError] = useState(null);
+  const [isPartiallyUnavailable, setIsPartiallyUnavailable] = useState(false);
   const [message, setMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  async function loadRequests() {
-    try {
-      const data = await getRequests();
-      setRequests(data);
-    } catch (error) {
-      setMessage(error.message);
+  function applyDashboardData(snapshot) {
+    if (snapshot.requestsResult.status === "fulfilled") {
+      setRequests(snapshot.requestsResult.value);
     }
+    if (snapshot.metricsResult.status === "fulfilled") {
+      setMetrics(snapshot.metricsResult.value);
+    }
+    if (snapshot.comparisonResult.status === "fulfilled") {
+      setComparison(snapshot.comparisonResult.value);
+    }
+
+    const dashboardError = firstDashboardError(snapshot);
+    setError(dashboardError ? normalizeError(dashboardError) : null);
+
+    return snapshot.requestsResult.status === "fulfilled"
+      ? snapshot.requestsResult.value
+      : null;
   }
 
   useEffect(() => {
-    loadRequests();
+    let ignore = false;
+
+    async function loadDashboard() {
+      const snapshot = await fetchDashboardData();
+      if (!ignore) {
+        applyDashboardData(snapshot);
+      }
+    }
+
+    loadDashboard();
+    return () => {
+      ignore = true;
+    };
   }, []);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
+  useEffect(() => {
+    if (selectedId === null) {
+      return undefined;
+    }
 
-    if (!prompt.trim()) return;
+    let ignore = false;
+
+    async function loadDetail() {
+      try {
+        const requestDetail = await getRequestDetail(selectedId);
+        if (!ignore) {
+          setDetail(requestDetail);
+        }
+      } catch (requestError) {
+        if (!ignore) {
+          setError(normalizeError(requestError));
+        }
+      }
+    }
+
+    loadDetail();
+    return () => {
+      ignore = true;
+    };
+  }, [selectedId]);
+
+  async function handleSubmit(prompt) {
+    setIsLoading(true);
+    setError(null);
+    setMessage("");
+    setLastSubmission(null);
+    setIsPartiallyUnavailable(false);
 
     try {
-      const savedRequest = await createRequest(prompt);
+      const { status, data } = await createRequest(prompt);
 
-      setMessage(`Saved successfully! ID: ${savedRequest.id}`);
-      setPrompt("");
+      if (status === 202) {
+        setIsPartiallyUnavailable(true);
+        setMessage(data.message);
+      } else {
+        setMessage(`Saved successfully! ID: ${data.id}`);
+        setLastSubmission({ ...data, selected_model_name: null });
+      }
 
-      await loadRequests();
-    } catch (error) {
-      setMessage(error.message);
+      const requestSummaries = applyDashboardData(await fetchDashboardData());
+
+      if (status === 200) {
+        const summary = requestSummaries?.find(
+          (request) => request.id === data.id,
+        );
+        setLastSubmission({
+          ...data,
+          selected_model_name: summary?.selected_model_name ?? null,
+        });
+      }
+    } catch (requestError) {
+      setError(normalizeError(requestError));
+      throw requestError;
+    } finally {
+      setIsLoading(false);
     }
   }
 
+  function handleSelect(id) {
+    setSelectedId(id);
+    setDetail(null);
+    setError(null);
+  }
+
+  const evaluationUnavailable =
+    lastSubmission?.status === "partial" &&
+    lastSubmission.evaluation === null;
+
   return (
-    <div style={{ padding: "40px", fontFamily: "Arial" }}>
+    <main style={{ padding: "40px", fontFamily: "Arial" }}>
       <h1>NeuroRoute</h1>
-      <p>Test our frontend-to-database connection.</p>
+      <p>Adaptive inference observability dashboard.</p>
 
-      <form onSubmit={handleSubmit}>
-        <input
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Enter your prompt..."
-          style={{ padding: "10px", width: "300px" }}
-        />
+      <PromptForm onSubmit={handleSubmit} isLoading={isLoading} />
+      <ErrorBanner error={error} />
 
-        <button type="submit" style={{ padding: "10px" }}>
-          Submit
-        </button>
-      </form>
+      {message && <p role="status">{message}</p>}
 
-      <p>{message}</p>
+      {isPartiallyUnavailable && (
+        <p>The request is pending until routing services recover.</p>
+      )}
 
-      <h2>Saved Requests</h2>
+      {lastSubmission && (
+        <section aria-labelledby="latest-response-heading">
+          <h2 id="latest-response-heading">Latest Response</h2>
+          <p>Complexity: {lastSubmission.complexity_class}</p>
+          <p>Model: {lastSubmission.selected_model_name ?? "—"}</p>
+          <p>Response: {lastSubmission.execution?.response_text ?? "—"}</p>
+          {evaluationUnavailable && (
+            <p>
+              Response generated. Quality evaluation was unavailable for this
+              request.
+            </p>
+          )}
+        </section>
+      )}
 
-      {requests.map((request) => (
-        <div key={request.id}>
-          <p>
-            #{request.id} — {request.prompt} ({request.status})
-          </p>
-        </div>
-      ))}
-    </div>
+      <MetricsSummary metrics={metrics} />
+      <ComparisonPanel metrics={comparison} />
+
+      <section aria-labelledby="saved-requests-heading">
+        <h2 id="saved-requests-heading">Saved Requests</h2>
+        <RequestList requests={requests} onSelect={handleSelect} />
+      </section>
+
+      <RequestDetail detail={detail} />
+    </main>
   );
 }
 

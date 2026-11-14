@@ -313,7 +313,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 6. Phase 6: Execution Engine
-  - [ ] 6.1 Create the Execution Engine orchestrator
+  - [x] 6.1 Create the Execution Engine orchestrator
     - Create `backend/app/adapters/engine.py`:
       - `def resolve_adapter(provider_name: str) -> ProviderAdapter` — maps `"gemini"` → `GeminiAdapter()`, `"ollama"` → `OllamaAdapter()`, `"groq"` → `GroqAdapter()`; raises `ConfigurationError` for unknown providers
       - `async def execute_request(routing_decision_id: int, prompt: str, model: Model, db: Session) -> Execution`:
@@ -327,12 +327,12 @@ Work follows a strict dependency order: DB models → services → routers → t
         8. Never raise unhandled exceptions — wrap all top-level errors in try/except
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10_
 
-  - [ ] 6.2 Create Pydantic schemas for executions
+  - [x] 6.2 Create Pydantic schemas for executions
     - Create `backend/app/schemas/executions.py`
     - `ExecutionResponse`: `id`, `routing_decision_id`, `response_text`, `input_token_count`, `output_token_count`, `latency_ms`, `estimated_cost`, `status`, `error_message`, `is_escalated`, `created_at`; `ConfigDict(from_attributes=True)`
     - _Requirements: 4.2, 4.3_
 
-  - [ ] 6.3 Write tests for the Execution Engine
+  - [x] 6.3 Write tests for the Execution Engine
     - Create `backend/tests/test_adapters/test_engine.py`:
       - Happy path: mocked adapter returns `status="completed"` → one `Execution` record persisted with correct fields
       - Timeout path: mocked adapter returns `status="timed_out"` → `Execution.status == "timed_out"`, no unhandled exception
@@ -343,16 +343,16 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 11: Error Containment** (PBT) — for any error condition, function returns an `Execution` record rather than raising; **Validates: Requirements 4.6, 4.7, 4.9**
     - _Requirements: 4.2, 4.3, 4.6, 4.7, 4.8, 4.9_
 
-  - [ ]* 6.4 Run Execution Engine property tests
+  - [x]* 6.4 Run Execution Engine property tests
     - Execute `pytest backend/tests/test_adapters/test_engine.py -v --tb=short`
     - **Property 11: Error Containment** — **Validates: Requirements 4.6, 4.7, 4.9**
 
-  - [ ] 6.5 Phase 6 Checkpoint — verify execution with a running Ollama instance
+  - [x] 6.5 Phase 6 Checkpoint — verify execution with a running Ollama instance
     - Register an Ollama model in the registry; call `execute_request()` directly in a Python shell against a running Ollama instance; confirm `Execution.status == "completed"` and `latency_ms >= 0`
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 7. Phase 7: Quality Evaluation and Escalation
-  - [ ] 7.1 Create the Evaluation Service
+  - [x] 7.1 Create the Evaluation Service
     - Create `backend/app/evaluation/__init__.py`
     - Create `backend/app/evaluation/evaluator.py`:
       - Validate `ESCALATION_CONFIDENCE_THRESHOLD` env var at module import time: read value, convert to float, assert it is in [0.0, 1.0]; raise `ConfigurationError` with a clear message if absent or out-of-range — this must run before any request is served
@@ -366,7 +366,7 @@ Work follows a strict dependency order: DB models → services → routers → t
         - For failed/timed_out executions: quality_score=0.0, confidence=0.0, escalation_flag=True if threshold > 0.0
     - _Requirements: 5.1, 5.3, 5.4_
 
-  - [ ] 7.2 Create the escalation handler
+  - [x] 7.2 Create the escalation handler
     - Create `backend/app/evaluation/escalation.py`:
       - `async def handle_escalation(original_request: Request, evaluation_record: Evaluation, db: Session) -> Execution | None`:
         1. If `evaluation_record.escalation_flag` is False: return None immediately
@@ -380,12 +380,12 @@ Work follows a strict dependency order: DB models → services → routers → t
         9. Maximum depth is 1 — enforced by checking `execution_record.is_escalated`; if already escalated, skip and return None
     - _Requirements: 5.4, 5.5, 5.6, 5.7_
 
-  - [ ] 7.3 Create Pydantic schemas for evaluations
+  - [x] 7.3 Create Pydantic schemas for evaluations
     - Create `backend/app/schemas/evaluations.py`
     - `EvaluationResponse`: `id`, `execution_id`, `quality_score`, `confidence`, `escalation_flag`, `created_at`; `ConfigDict(from_attributes=True)`
     - _Requirements: 5.1, 5.2_
 
-  - [ ] 7.4 Write tests for the Evaluation Service
+  - [x] 7.4 Write tests for the Evaluation Service
     - Create `backend/tests/test_evaluation/test_evaluator.py`:
       - Unit: `evaluate_execution` with a completed execution produces scores in [0.0, 1.0]
       - Unit: `escalation_flag = True` when confidence < threshold; `= False` when confidence ≥ threshold
@@ -397,17 +397,17 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 14: Escalation Flag Rule** (PBT, max_examples=100) — for any confidence value and threshold, `escalation_flag == (confidence < threshold)`; **Validates: Requirements 5.4**
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7_
 
-  - [ ]* 7.5 Run Evaluation Service property tests
+  - [x]* 7.5 Run Evaluation Service property tests
     - Execute `pytest backend/tests/test_evaluation/ -v --tb=short`
     - **Property 13: Evaluation Score Bounds** — **Validates: Requirements 5.1**
     - **Property 14: Escalation Flag Rule** — **Validates: Requirements 5.4**
 
-  - [ ] 7.6 Phase 7 Checkpoint — verify evaluation and escalation logic
+  - [x] 7.6 Phase 7 Checkpoint — verify evaluation and escalation logic
     - In a Python shell: create a mock `Execution` with `status="completed"` and a short response; call `evaluate_execution()` and confirm scores are in [0.0, 1.0] and `escalation_flag` matches the threshold comparison
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 8. Phase 8: Feedback System
-  - [ ] 8.1 Create the Feedback Service
+  - [x] 8.1 Create the Feedback Service
     - Create `backend/app/feedback/__init__.py`
     - Create `backend/app/feedback/service.py`:
       - `def create_feedback(request_id: int, rating: int, comment: str | None, db: Session) -> Feedback`:
@@ -420,22 +420,22 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `def get_feedback_summary(db: Session) -> FeedbackSummary` — compute mean_rating (round to 2dp), per-value distribution (keys "1"–"5"), total_count; return zeros/empty distribution if no records
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9_
 
-  - [ ] 8.2 Create Pydantic schemas for feedback
+  - [x] 8.2 Create Pydantic schemas for feedback
     - Create `backend/app/schemas/feedback.py`
     - `FeedbackCreate`: `rating` (int, ge=1, le=5), `comment` (str | None, max_length=500)
     - `FeedbackResponse`: `id`, `request_id`, `rating`, `comment`, `created_at`; `ConfigDict(from_attributes=True)`
     - `FeedbackSummary`: `mean_rating` (float), `distribution` (dict[str, int] — keys "1" to "5"), `total_count` (int)
     - _Requirements: 6.7, 6.9_
 
-  - [ ] 8.3 Create the Feedback router and register it in `main.py`
+  - [x] 8.3 Create the Feedback router and register it in `main.py`
     - Create `backend/app/routers/feedback.py` with `APIRouter(prefix="/api", tags=["Feedback"])`:
       - `POST /requests/{request_id}/feedback` → calls `create_feedback()`; return `FeedbackResponse` with status 201
       - `GET /requests/{request_id}/feedback` → calls `get_feedback()`; return `FeedbackResponse`
       - `GET /metrics/feedback-summary` → calls `get_feedback_summary()`; return `FeedbackSummary`
     - Add `from app.routers.feedback import router as feedback_router` and `app.include_router(feedback_router)` in `main.py` without touching any existing code
-    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.9_
+    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.9_0
 
-  - [ ] 8.4 Write tests for the Feedback System
+  - [x] 8.4 Write tests for the Feedback System
     - Create `backend/tests/test_feedback/test_service.py`:
       - Unit: create feedback for valid request → HTTP 201 with correct fields
       - Unit: create feedback for non-existent request_id → HTTP 404
@@ -450,19 +450,19 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 18: Feedback Summary Correctness** (PBT, max_examples=100) — for any set of N feedback records, mean equals arithmetic mean rounded to 2dp, distribution counts sum to total_count; **Validates: Requirements 6.9**
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9_
 
-  - [ ]* 8.5 Run Feedback Service property tests
+  - [x]* 8.5 Run Feedback Service property tests
     - Execute `pytest backend/tests/test_feedback/ -v --tb=short`
     - **Property 15: Feedback Rating Bounds** — **Validates: Requirements 6.1, 6.2**
     - **Property 16: Feedback Round-Trip** — **Validates: Requirements 6.1, 6.7**
     - **Property 17: Feedback Uniqueness** — **Validates: Requirements 6.4**
     - **Property 18: Feedback Summary Correctness** — **Validates: Requirements 6.9**
 
-  - [ ] 8.6 Phase 8 Checkpoint — verify Feedback endpoints via Swagger UI
+  - [x] 8.6 Phase 8 Checkpoint — verify Feedback endpoints via Swagger UI
     - Submit feedback via `POST /api/requests/{id}/feedback`, retrieve via `GET /api/requests/{id}/feedback`, check `GET /api/metrics/feedback-summary` reflects the submitted rating
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 9. Phase 9: End-to-End Pipeline Integration
-  - [ ] 9.1 Expand Pydantic schemas in `backend/app/schemas/requests.py`
+  - [x] 9.1 Expand Pydantic schemas in `backend/app/schemas/requests.py`
     - Add these new schemas while keeping `RequestResponse` intact (`RequestCreate` validation is handled by Task 9.1a):
       - `PipelineResponse`: `id`, `prompt`, `status`, `complexity_class`, `routing` (RoutingDecisionResponse), `execution` (ExecutionResponse), `evaluation` (EvaluationResponse | None), `end_to_end_latency_ms`, `step_errors` (list[dict])
       - `DegradedResponse`: `id`, `prompt`, `status`, `message`
@@ -471,7 +471,7 @@ Work follows a strict dependency order: DB models → services → routers → t
       - `AggregateMetricsResponse`: `total_count`, `mean_latency_ms`, `mean_estimated_cost`, `mean_quality_score`, `adaptive_mean_latency_ms`, `adaptive_mean_cost`, `baseline_mean_latency_ms`, `baseline_mean_cost`
     - _Requirements: 8.2, 8.4, 7.8, 7.9_
 
-  - [] 9.1a Add API-level prompt validation to `RequestCreate`
+  - [x] 9.1a Add API-level prompt validation to `RequestCreate`
     - Modify `backend/app/schemas/requests.py`: `RequestCreate.prompt` becomes `str = Field(min_length=1, max_length=1000)` plus a validator that rejects a prompt that is empty after stripping whitespace. The stored prompt stays the original, unmodified text. The 1000 limit is in characters, matching `requests.prompt String(1000)` and `tech.md`
     - Keep `RequestResponse` unchanged; valid requests keep the exact existing request and response shape
     - This is the only change to `RequestCreate`. It must land before Task 9.2 so the pipeline never receives an invalid prompt, and a rejected request must not create a `requests` row
@@ -479,7 +479,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - PBT (Hypothesis, max_examples=100): any string of 1 to 1000 characters that contains a non-whitespace character is accepted; any string longer than 1000 characters is rejected with 422
     - _Requirements: 8.7_
 
-  - [ ] 9.2 Implement the pipeline orchestrator in `backend/app/routers/requests.py`
+  - [x] 9.2 Implement the pipeline orchestrator in `backend/app/routers/requests.py`
     - **MODIFY** `POST /` to orchestrate the full pipeline following this sequence:
       1. Validate prompt (`RequestCreate`, Task 9.1a) → HTTP 422 on failure; nothing is persisted
       2. Persist `Request(status="pending")` → HTTP 500 on DB failure
@@ -503,7 +503,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - **ADD** `GET /metrics` (full path `GET /api/requests/metrics`) returning `AggregateMetricsResponse` computed with `func.count()` and `func.avg()` on completed executions; distinguish adaptive vs baseline by `RoutingDecision.policy`. Declare this route BEFORE `GET /{request_id}`, otherwise FastAPI treats "metrics" as a request id and returns 422
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 5.8, 5.9_
 
-  - [ ] 9.3 Write integration and pipeline tests
+  - [x] 9.3 Write integration and pipeline tests
     - Create `backend/tests/test_pipeline/test_orchestrator.py`:
       - Full pipeline smoke test with mocked adapters: POST valid prompt → HTTP 200 with all required fields populated
       - Mocked Routing unavailable → HTTP 202 with `status="pending"` and degraded message
@@ -516,7 +516,7 @@ Work follows a strict dependency order: DB models → services → routers → t
       - **Property 20: Pipeline Response Completeness** (PBT) — for any successful pipeline run, response contains all required top-level fields; **Validates: Requirements 8.2**
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-  - [ ]* 9.4 Run pipeline integration property tests
+  - [x]* 9.4 Run pipeline integration property tests
     - Execute `pytest backend/tests/test_pipeline/ -v --tb=short`
     - **Property 19: Pipeline Latency Composition** — **Validates: Requirements 8.5**
     - **Property 20: Pipeline Response Completeness** — **Validates: Requirements 8.2**
@@ -529,23 +529,23 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 10. Phase 10: Observability Dashboard
-  - [ ] 10.1 Extract `PromptForm` and create `ErrorBanner` components
+  - [x] 10.1 Extract `PromptForm` and create `ErrorBanner` components
     - Create `frontend/src/components/PromptForm.jsx` — extract the prompt `<input>` and `<button>` from `App.jsx`; accept `onSubmit(prompt)` and `isLoading` props
     - Create `frontend/src/components/ErrorBanner.jsx` — accepts `error: { status, message } | null` prop; displays HTTP status code and plain-language message; renders nothing when error is null
     - _Requirements: 7.6, 7.7_
 
-  - [ ] 10.2 Create request list and detail components
+  - [x] 10.2 Create request list and detail components
     - Create `frontend/src/components/RequestListItem.jsx` — displays: truncated prompt (100 chars + `…`), `complexity_class`, `selected_model_name`, `estimated_cost` formatted with `toFixed(4)` + " USD", `quality_score` formatted with `toFixed(2)`; calls `onSelect(id)` prop on click
     - Create `frontend/src/components/RequestList.jsx` — accepts `requests[]` and `onSelect` props; renders a list of `RequestListItem`; shows "No requests have been submitted." when list is empty
     - Create `frontend/src/components/RequestDetail.jsx` — accepts `detail: RequestDetailResponse | null` prop; displays full prompt, routing explanation, response text, token counts, latency, estimated cost (4dp), quality score (2dp), confidence (2dp), feedback rating if submitted; renders nothing when detail is null
     - _Requirements: 7.1, 7.2_
 
-  - [ ] 10.3 Create metrics and comparison panel components
+  - [x] 10.3 Create metrics and comparison panel components
     - Create `frontend/src/components/MetricsSummary.jsx` — accepts `metrics: AggregateMetricsResponse | null`; displays: total request count, mean latency (integer), mean estimated cost (4dp USD), mean quality score (2dp); shows "0" / "0.0000" / "0.00" for each metric when metrics is null or all counts are zero
     - Create `frontend/src/components/ComparisonPanel.jsx` — accepts `metrics: AggregateMetricsResponse | null`; displays two columns (Adaptive Routing / Baseline Router) each showing mean latency and mean cost; shows "Insufficient data" for a column when the respective mean is null or absent (fewer than one execution for that mode)
     - _Requirements: 7.3, 7.4_
 
-  - [ ] 10.4 Expand `frontend/src/services/api.js` with all new API functions
+  - [x] 10.4 Expand `frontend/src/services/api.js` with all new API functions
     - Replace any hardcoded `"http://localhost:8000"` with `import.meta.env.VITE_API_URL`
     - Update `createRequest(prompt)` to handle both HTTP 200 (`PipelineResponse`) and HTTP 202 (`DegradedResponse`); return `{ status: response.status, data: body }`
     - Update `getRequests()` to map `RequestSummaryResponse[]`
@@ -553,7 +553,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - All functions throw `new Error(...)` with `{ status, message }` shape on non-OK responses
     - _Requirements: 7.5, 7.6, 7.7, 7.8_
 
-  - [ ] 10.5 Update `frontend/src/App.jsx` to wire all components
+  - [x] 10.5 Update `frontend/src/App.jsx` to wire all components
     - Add state variables: `selectedId`, `detail`, `metrics`, `comparison`, `lastSubmission`, `error`, `isPartiallyUnavailable`
     - On mount: fetch requests, aggregate metrics, and comparison metrics
     - On new submission: if HTTP 202 → set `isPartiallyUnavailable=true`, display degraded message; if HTTP 200 → set `lastSubmission` with complexity, model name, response text; if HTTP 200 with `status` `partial` and `evaluation` null → still show the response text and model name plus the notice "Response generated. Quality evaluation was unavailable for this request." (never the 202 message, never `pending`)
@@ -562,7 +562,7 @@ Work follows a strict dependency order: DB models → services → routers → t
     - Render all sub-components with correct props; on any API error set `error` state for `ErrorBanner`
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.7, 7.8_
 
-  - [ ] 10.6 Configure `VITE_API_URL` environment variable
+  - [x] 10.6 Configure `VITE_API_URL` environment variable
     - Create `frontend/.env.local` if it does not exist; add `VITE_API_URL=http://localhost:8000`
     - Verify `vite.config.js` does not need changes (Vite loads `.env.local` automatically)
     - _Requirements: 7.6_
